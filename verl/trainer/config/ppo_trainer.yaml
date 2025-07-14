@@ -310,6 +310,9 @@ trainer:
   # Default local directory for saving checkpoints
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
 
+  # Default local directory for saving rollout data
+  rollout_save_path: null
+
   # Maximum number of actor checkpoints to keep
   max_actor_ckpt_to_keep: null
 
