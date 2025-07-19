@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from math_verify.errors import TimeoutException
-from math_verify.metric import math_metric
-from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+import re
 
 def getCorrectness(model_name: str, model_output: str, ground_truth: str) -> bool:
     if model_name == "Qwen/Qwen3-4B":
@@ -22,23 +20,13 @@ def getCorrectness(model_name: str, model_output: str, ground_truth: str) -> boo
             model_output = model_output.split('</think>')[-1]
     else:
         raise ValueError(f"Model name {model_name} not supported")
+    ANSWER_PATTERN_MULTICHOICE = r"(?i)Answer[ \t]*:[ \t]*\$?([A-Z])\$?"
 
-    verify_func = math_metric(
-        gold_extraction_target=(LatexExtractionConfig(),),
-        pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
-    )
-    ret_score = 0.0
-
-    # Wrap the ground truth in \boxed{} format for verification
-    ground_truth_boxed = "\\boxed{" + ground_truth + "}"
-    try:
-        ret_score, _ = verify_func([ground_truth_boxed], [model_output])
-    except Exception:
-        pass
-    except TimeoutException:
-        ret_score = timeout_score
-
-    return ret_score
+    match = re.search(ANSWER_PATTERN_MULTICHOICE, model_output)
+    extracted_answer = match.group(1) if match else None
+    # print(f"extracted_answer: {extracted_answer}, ground_truth: {ground_truth}")
+    score = 1.0 if extracted_answer == ground_truth else 0.0
+    return score
 
 def get_soft_format_score(model_name: str, model_output:str) -> float:
     if model_name == "Qwen/Qwen3-4B":

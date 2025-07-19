@@ -20,6 +20,7 @@ def default_compute_score(
     data_source,
     solution_str,
     ground_truth,
+    model_name=None,
     extra_info=None,
     sandbox_fusion_url=None,
     concurrent_semaphore=None,
@@ -40,7 +41,15 @@ def default_compute_score(
     Raises:
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
-    if data_source == "openai/gsm8k":
+    if data_source == 'math-numina' or data_source == 'math-aime' or data_source == 'math-amc' or data_source == 'olympiad':
+        from . import math_verify_sum
+        res = math_verify_sum.compute_score(solution_str, ground_truth, model_name)
+    
+    elif data_source == 'commonsense' or data_source == 'ARC-Easy' or data_source == 'ARC-Challenge' or data_source == 'gpqa':
+        from . import mcqa
+        res = mcqa.compute_score(solution_str, ground_truth, model_name)
+    
+    elif data_source == "openai/gsm8k":
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)

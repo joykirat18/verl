@@ -34,7 +34,7 @@ import threading
 from contextlib import contextmanager
 from copy import deepcopy
 from types import MethodType
-from typing import Any
+from typing import Any, List
 
 import numpy as np
 import ray
@@ -54,6 +54,9 @@ from verl import DataProto
 from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
+import random
+import requests
+# from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -87,6 +90,7 @@ class vLLMRollout(BaseRollout):
         """
         super().__init__()
         self.config = config
+        self.tokenizer = tokenizer
 
         tensor_parallel_size = self.config.get("tensor_model_parallel_size", 1)
         assert tensor_parallel_size <= torch.distributed.get_world_size(), (
@@ -183,6 +187,7 @@ class vLLMRollout(BaseRollout):
             **lora_kwargs,
             **engine_kwargs,
         )
+        self.model_path = model_path
 
         # Offload vllm model to reduce peak memory usage
         if config.free_cache_engine:
@@ -424,6 +429,7 @@ class vLLMRollout(BaseRollout):
 
         # used to construct attention_mask
         eos_token_id = prompts.meta_info["eos_token_id"]
+        rollout_n = prompts.meta_info["rollout_n"]
 
         batch_size = idx.size(0)
 
@@ -485,32 +491,132 @@ class vLLMRollout(BaseRollout):
                 lora_requests = [
                     LoRARequest(lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/simon-stub-path")
                 ] * batch_size
+        
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
+            # sample more to have more room for errors if the format is not correct
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
                 lora_request=lora_requests,
-                use_tqdm=False,
+                use_tqdm=True,
             )
 
             # TODO(sgm): disable logprob when recompute_log_prob is enable
             # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
+
 
             response = []
             rollout_log_probs = []
             for output in outputs:
                 for sample_id in range(len(output.outputs)):
                     response_ids = output.outputs[sample_id].token_ids
-                    response.append(response_ids)
+                    prompt_ids = output.prompt_token_ids
+                    response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "summarized": False})
                     if self.config.calculate_log_probs:
                         curr_log_prob = []
                         for i, logprob in enumerate(output.outputs[sample_id].logprobs):
                             curr_log_prob.append(logprob[response_ids[i]].logprob)
                         rollout_log_probs.append(curr_log_prob)
+            
+            # breakpoint()
+            
+            correct_format_response = []
+            summary_inputs = []
+            for res in response:
+                prompt_ids = res["prompt_ids"]
+                response_ids = res["response_ids"]
+                correct_format, think_str = self.check_format(self.model_path, response_ids)
+                if (correct_format):
+                    summary_inputs.append(think_str)
+                    correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str})
 
-            response = pad_2d_list_to_length(response, self.pad_token_id, max_length=self.config.response_length).to(
+
+            print(f"Summarizing {len(summary_inputs)} responses")
+            if len(summary_inputs) == 0:
+                final_response = [res["response_ids"] for res in response]
+                response_is_summarized = [False] * len(final_response)
+            else:
+                summary_outputs = self.summarize_think(summary_inputs)
+                for i, summary_output in enumerate(summary_outputs):
+                    correct_format_response[i]["summary_output"] = summary_output
+                
+
+                vllm_inputs_summarized = []
+                for res in correct_format_response:
+                    prompt_ids = res["prompt_ids"]
+                    response_ids = res["response_ids"]
+                    think_str = res["think_str"]
+                    summary_output = res["summary_output"]
+                    vllm_input = self.create_vllm_summary_inputs(prompt_ids, summary_output)
+
+                    vllm_inputs_summarized.append({'prompt_ids': prompt_ids, 'response_ids': vllm_input, 'summarized_prompt_ids': vllm_input})
+                
+                # breakpoint()
+                max_tokens = self.config.response_length - max([len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized])
+                print(f"Summarized response length: {[len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized]}")
+                print(f"Max tokens: {max_tokens} response length: {self.config.response_length}")
+                with self.update_sampling_params(
+                    n=1,
+                    temperature=0.6,
+                    top_p=0.95,
+                    top_k=20,
+                    max_tokens=max_tokens
+                ):
+                    summarized_outputs = self.inference_engine.generate(
+                        prompts=[{'prompt_token_ids': vllm_input['summarized_prompt_ids']} for vllm_input in vllm_inputs_summarized],  # because we have already convert it to prompt token id
+                        sampling_params=self.sampling_params,
+                        lora_request=lora_requests,
+                        use_tqdm=True,
+                    )
+
+                    # breakpoint()
+
+                    for i, res in enumerate(summarized_outputs):
+                        response_ids = res.outputs[0].token_ids
+                        prompt_ids = res.prompt_token_ids
+                        assert prompt_ids == vllm_inputs_summarized[i]["summarized_prompt_ids"]
+                        vllm_inputs_summarized[i]["summarized_response_ids"] = response_ids
+                    
+                    # breakpoint()
+
+                    # group original response and vllm_input_summarized by prompt_ids
+                    grouped_response = response
+                    for i, res in enumerate(vllm_inputs_summarized):
+                        # new summarized response should have the think part included
+                        new_response_ids = self.create_summarized_response(res["prompt_ids"], res["summarized_prompt_ids"], res["summarized_response_ids"])
+                        grouped_response.append({"prompt_ids": res["prompt_ids"], "response_ids": new_response_ids, "summarized": True})
+                    
+                    # breakpoint()
+                    # group the dict by prompt_ids
+                    grouped_response_list = []
+                    seen = {}
+                    for res in grouped_response:
+                        key = tuple(res["prompt_ids"])
+                        if key not in seen:
+                            seen[key] = len(grouped_response_list)
+                            grouped_response_list.append([res])
+                        else:
+                            grouped_response_list[seen[key]].append(res)
+
+                    # breakpoint()
+                    
+                    # shuffle the grouped_response_dict
+                    final_response = []
+                    response_is_summarized = []
+                    for group in grouped_response_list:
+                        original_responses = [res for res in group if not res["summarized"]]
+                        summarized_responses = [res for res in group if res["summarized"]]
+                        all_responses = original_responses + summarized_responses
+                        random.shuffle(all_responses)
+                        selected_responses = all_responses[:rollout_n]
+                        for res in selected_responses:
+                            final_response.append(res["response_ids"])
+                            response_is_summarized.append(res["summarized"])
+                
+
+            final_response = pad_2d_list_to_length(final_response, self.pad_token_id, max_length=self.config.response_length).to(
                 idx.device
             )
             if self.config.calculate_log_probs:
@@ -519,9 +625,11 @@ class vLLMRollout(BaseRollout):
                 ).to(idx.device)
                 rollout_log_probs = rollout_log_probs.to(torch.float32)
 
-            seq = torch.cat([idx, response], dim=-1)
+            seq = torch.cat([idx, final_response], dim=-1)
 
-        response_length = response.size(1)
+        # breakpoint()
+        print(f"Final response length: {final_response.size(1)}")
+        response_length = final_response.size(1)
         delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
         delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
         if position_ids.dim() == 3:  # qwen2vl mrope
@@ -533,8 +641,12 @@ class vLLMRollout(BaseRollout):
         # position_ids:   [0,0,0,0,0,1,2,3, | 4,5,6,7,8,9,10,11]
         response_position_ids = position_ids[..., -1:] + delta_position_id
         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
-        response_attention_mask = get_response_mask(
-            response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype
+
+        response_attention_mask = self.get_custom_response_mask(
+            response_id=final_response, 
+            eos_token=eos_token_id, 
+            dtype=attention_mask.dtype,
+            is_summarized_list=response_is_summarized,
         )
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
 
@@ -542,7 +654,7 @@ class vLLMRollout(BaseRollout):
         batch = TensorDict(
             {
                 "prompts": idx,
-                "responses": response,
+                "responses": final_response,
                 "input_ids": seq,  # here input_ids become the whole sentences
                 "attention_mask": attention_mask,
                 "position_ids": position_ids,
@@ -554,6 +666,146 @@ class vLLMRollout(BaseRollout):
             batch["rollout_log_probs"] = rollout_log_probs
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+    
+    # Modified attention mask calculation
+    def get_custom_response_mask(self, response_id, eos_token, dtype, is_summarized_list):
+        """
+        Create attention mask where:
+        - 0 for EOS tokens and everything after
+        - 0 for tokens between <think> and </think> tags when response is from summarized prompt
+        - 1 for all other tokens (before EOS)
+        
+        Based on the existing get_response_mask function but with think token masking.
+        Assumes only one <think></think> pair per response.
+        """
+        # First get the standard EOS mask using the existing logic
+        eos_mask = torch.isin(response_id, torch.tensor(eos_token, device=response_id.device)).int()
+        base_mask = (eos_mask.cumsum(dim=1) - eos_mask).eq(0).to(dtype)
+        
+        # Get think token IDs
+        think_start_token_id = self.tokenizer.encode("<think>", add_special_tokens=False)[0]
+        think_end_token_id = self.tokenizer.encode("</think>", add_special_tokens=False)[0]
+        
+        # Now modify for summarized responses
+        batch_size = response_id.shape[0]
+        final_mask = base_mask.clone()
+        
+        for i in range(batch_size):
+            if is_summarized_list[i]:
+                # Find the single <think> and </think> tokens in this sequence
+                think_start_positions = (response_id[i] == think_start_token_id).nonzero(as_tuple=True)[0]
+                think_end_positions = (response_id[i] == think_end_token_id).nonzero(as_tuple=True)[0]
+                
+                if len(think_start_positions) > 0 and len(think_end_positions) > 0:
+                    start_pos = think_start_positions[0]
+                    end_pos = think_end_positions[0]
+                    
+                    # Set attention mask to 0 for tokens from <think> to </think> (inclusive)
+                    final_mask[i, start_pos:end_pos+1] = 0
+        
+        return final_mask
+
+
+    def check_format(self, model_path: str, response_ids: list[int]) -> bool:
+        response_str = self.tokenizer.decode(response_ids)
+        if model_path == "Qwen/Qwen3-4B":
+            import re
+            pattern = r"<think>(.*?)</think>"
+            match = re.findall(pattern, response_str, re.DOTALL)
+            if match and len(match) == 1:
+                return True, match[0]
+            else:
+                return False, None
+        else:
+            raise ValueError(f"Model path {model_path} not supported")
+    
+    def get_summary_prompt(self, think_str: str) -> str:
+        summarizationPrompt = (
+            "You are a helpful and concise reasoning summarization assistant. Your task is to summarize a long chain of reasoning into a concise summary, while preserving the logical flow and key insights.\n\n"
+            "Guidelines:\n"
+            "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
+            "Be concise—rephrase and compress wherever possible without losing critical content.\n"
+            "Avoid omitting essential details that change the meaning or validity of the reasoning.\n"
+        )
+        if self.model_path == "Qwen/Qwen3-4B":
+            message = [
+                {"role": "system", "content": summarizationPrompt},
+                {"role": "user", "content": think_str}
+            ]
+            prompt = self.tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            tokenized_prompt = self.tokenizer.apply_chat_template(message, tokenize=True, add_generation_prompt=True, enable_thinking=False)
+            return prompt, tokenized_prompt
+        else:
+            raise ValueError(f"Model path {self.model_path} not supported")
+        
+    def summarize_think(self, summary_inputs) -> List[str]:
+        if self.model_path == "Qwen/Qwen3-4B":
+            prompts = []
+            tokenized_prompts = []
+            for input in summary_inputs:
+                prompt, tokenized_prompt = self.get_summary_prompt(input)
+                prompts.append(prompt)
+                tokenized_prompts.append(tokenized_prompt)
+            
+            if self.model_path == "Qwen/Qwen3-4B":
+                max_tokens = 40960 - max([len(tokenized_prompt) for tokenized_prompt in tokenized_prompts])
+                max_tokens = min(25000, max_tokens)
+            else:
+                raise ValueError(f"Model path {self.model_path} not supported")
+            print(f"Max tokens: {max_tokens} for summarization")
+            summary_outputs = self.query_vllm_summary_batch(prompts, max_tokens)
+            summary_outputs = [summary_outputs[i]["text"].strip() for i, input in enumerate(summary_inputs)]
+            return summary_outputs
+        else:
+            raise ValueError(f"Model path {self.model_path} not supported")
+        
+    def query_vllm_summary_batch(self, prompts: List[str], max_tokens: int):
+        """Batch query for vllm summarization endpoint using a single max_tokens value for all"""
+
+        # generated_texts = []
+        # for prompt in prompts:
+        #     text = prompt.split('<|im_start|>user')[-1].split('<|im_end|>')[0].strip()
+        #     generated_texts.append({"text": text[:len(text)//2]})
+        
+        # return generated_texts
+
+        response = requests.post(
+            "http://localhost:8001/v1/completions",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": self.model_path,
+                "prompt": prompts,
+                "max_tokens": max_tokens,
+                "temperature": 0.8,
+                "top_p": 0.95,
+                "top_k": 20,
+                # "presence_penalty": 1.5,
+            },
+            timeout=60,
+        )
+
+        response.raise_for_status()
+
+        return response.json()["choices"]
+    
+    def create_vllm_summary_inputs(self, prompt_ids: List[int], summarized_think: str) -> List[str]:
+        prompt_str = self.tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+        new_prompt = prompt_str + "<think>" + summarized_think + "</think>"
+
+        new_prompt_ids = self.tokenizer.encode(new_prompt, add_special_tokens=True)
+
+        return new_prompt_ids
+    
+    def create_summarized_response(self, prompt_ids: List[int], summarized_prompt_ids: List[int], summarized_response_ids: List[int]) -> List[int]:
+        # remove the overlap part of prompt_ids and summarized_prompt_ids
+        # then append the remaining part to the summarized_response_ids
+
+        prompt_ids_non_overlap = summarized_prompt_ids[len(prompt_ids):]
+        response_ids = prompt_ids_non_overlap + summarized_response_ids
+        return response_ids
+
+
 
 
 # https://github.com/vllm-project/vllm/issues/13175
