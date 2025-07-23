@@ -54,9 +54,10 @@ from verl import DataProto
 from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
+from verl.utils.reward_score import default_compute_score
 import random
 import requests
-# from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -232,10 +233,10 @@ class vLLMRollout(BaseRollout):
         # Check if tree mode is enabled
         is_validate = prompts.meta_info.get("validate", False)
 
-        if is_validate:
-            return self.generate_original_sequences(prompts, **kwargs)
-        else:
-            return self.generate_summarization_sequences(prompts, **kwargs)
+        # if is_validate:
+        return self.generate_original_sequences(prompts, **kwargs)
+        # else:
+        #     return self.generate_summarization_sequences(prompts, **kwargs)
 
 
     @GPUMemoryLogger(role="vllm rollout spmd", logger=logger)
@@ -438,6 +439,11 @@ class vLLMRollout(BaseRollout):
             non_tensor_batch["raw_prompt_ids"] = np.array(
                 [_pre_process_inputs(self.pad_token_id, idx[i]) for i in range(batch_size)], dtype=object
             )
+        data_source_list = non_tensor_batch['data_source']
+        reward_model_list = non_tensor_batch['reward_model']
+        uuid_list = non_tensor_batch['uuid']
+        difficulty_list = []
+        
 
         if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
             raise RuntimeError("vllm sharding manager is not work properly.")
@@ -509,17 +515,39 @@ class vLLMRollout(BaseRollout):
 
             response = []
             rollout_log_probs = []
+            counter = 0
             for output in outputs:
                 for sample_id in range(len(output.outputs)):
                     response_ids = output.outputs[sample_id].token_ids
                     prompt_ids = output.prompt_token_ids
-                    response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "summarized": False})
+                    response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "summarized": False, "uuid": uuid_list[counter], 'data_source': data_source_list[counter], 'reward_model': reward_model_list[counter]})
+                    counter += 1
                     if self.config.calculate_log_probs:
                         curr_log_prob = []
                         for i, logprob in enumerate(output.outputs[sample_id].logprobs):
                             curr_log_prob.append(logprob[response_ids[i]].logprob)
                         rollout_log_probs.append(curr_log_prob)
             
+            uuid_set = set([res['uuid'] for res in response])
+            uuid_difficulty = {}
+            for id in uuid_set:
+                response_ids = [res['response_ids'] for res in response if res['uuid'] == id]
+                prompt_ids = [res['prompt_ids'] for res in response if res['uuid'] == id]
+                data_source = [res['data_source'] for res in response if res['uuid'] == id]
+                reward_model = [res['reward_model'] for res in response if res['uuid'] == id]
+                score_list = []
+                for i in range(len(response_ids)):
+                    solution_str = self.tokenizer.decode(response_ids[i])
+                    score = default_compute_score(data_source[i], solution_str, reward_model[i]['ground_truth'], self.model_path)['score']
+                    if score > 0:
+                        score_list.append(1)
+                    else:
+                        score_list.append(0)
+                uuid_difficulty[id] = sum(score_list) / len(score_list)
+        
+            for uuid in uuid_list:
+                difficulty_list.append(uuid_difficulty[uuid])
+
             # breakpoint()
             
             correct_format_response = []
@@ -533,6 +561,7 @@ class vLLMRollout(BaseRollout):
                     correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str})
 
 
+            summary_inputs = []
             print(f"Summarizing {len(summary_inputs)} responses")
             if len(summary_inputs) == 0:
                 final_response = [res["response_ids"] for res in response]
@@ -649,6 +678,7 @@ class vLLMRollout(BaseRollout):
             is_summarized_list=response_is_summarized,
         )
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+        non_tensor_batch['difficulty'] = np.array(difficulty_list)
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
@@ -708,7 +738,7 @@ class vLLMRollout(BaseRollout):
 
     def check_format(self, model_path: str, response_ids: list[int]) -> bool:
         response_str = self.tokenizer.decode(response_ids)
-        if model_path == "Qwen/Qwen3-4B":
+        if model_path == "Qwen/Qwen3-4B" or model_path == "Qwen/Qwen3-8B":
             import re
             pattern = r"<think>(.*?)</think>"
             match = re.findall(pattern, response_str, re.DOTALL)
@@ -727,7 +757,7 @@ class vLLMRollout(BaseRollout):
             "Be concise—rephrase and compress wherever possible without losing critical content.\n"
             "Avoid omitting essential details that change the meaning or validity of the reasoning.\n"
         )
-        if self.model_path == "Qwen/Qwen3-4B":
+        if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
             message = [
                 {"role": "system", "content": summarizationPrompt},
                 {"role": "user", "content": think_str}
@@ -739,7 +769,7 @@ class vLLMRollout(BaseRollout):
             raise ValueError(f"Model path {self.model_path} not supported")
         
     def summarize_think(self, summary_inputs) -> List[str]:
-        if self.model_path == "Qwen/Qwen3-4B":
+        if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
             prompts = []
             tokenized_prompts = []
             for input in summary_inputs:
@@ -747,7 +777,7 @@ class vLLMRollout(BaseRollout):
                 prompts.append(prompt)
                 tokenized_prompts.append(tokenized_prompt)
             
-            if self.model_path == "Qwen/Qwen3-4B":
+            if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
                 max_tokens = 40960 - max([len(tokenized_prompt) for tokenized_prompt in tokenized_prompts])
                 max_tokens = min(25000, max_tokens)
             else:
@@ -758,7 +788,12 @@ class vLLMRollout(BaseRollout):
             return summary_outputs
         else:
             raise ValueError(f"Model path {self.model_path} not supported")
-        
+            
+    @retry(
+        stop=stop_after_attempt(5),                          # Try up to 5 times
+        wait=wait_exponential(multiplier=1, min=1, max=10),  # Wait: 1s, 2s, 4s, 8s, 10s
+        retry=retry_if_exception_type(requests.exceptions.RequestException)
+    )
     def query_vllm_summary_batch(self, prompts: List[str], max_tokens: int):
         """Batch query for vllm summarization endpoint using a single max_tokens value for all"""
 

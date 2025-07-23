@@ -15,7 +15,7 @@
 import re
 
 def getCorrectness(model_name: str, model_output: str, ground_truth: str) -> bool:
-    if model_name == "Qwen/Qwen3-4B":
+    if model_name == "Qwen/Qwen3-4B" or model_name == "Qwen/Qwen3-8B":
         if '</think>' in model_output:
             model_output = model_output.split('</think>')[-1]
     else:
@@ -29,16 +29,16 @@ def getCorrectness(model_name: str, model_output: str, ground_truth: str) -> boo
     return score
 
 def get_soft_format_score(model_name: str, model_output:str) -> float:
-    if model_name == "Qwen/Qwen3-4B":
+    if model_name == "Qwen/Qwen3-4B" or model_name == "Qwen/Qwen3-8B":
         if model_output.count('<think>') == 1 and model_output.count('</think>') == 1:
-            return 0.1
+            return 0.25
         else:
             return 0.0
     else:
         raise ValueError(f"Model name {model_name} not supported")
 
 def get_hard_format_score(model_name: str, model_output:str) -> float:
-    if model_name == "Qwen/Qwen3-4B":
+    if model_name == "Qwen/Qwen3-4B" or model_name == 'Qwen/Qwen3-8B':
         current_pos = 0
         think_pos = model_output.find('<think>', current_pos)
         if think_pos == -1:
@@ -49,14 +49,14 @@ def get_hard_format_score(model_name: str, model_output:str) -> float:
             return 0.0
         if think_pos > think_end_pos:
             return 0.0
-        return 0.1
+        return 0.25
     else:
         raise ValueError(f"Model name {model_name} not supported")
         
 
 def compute_score(model_output: str, ground_truth: str, model_name: str, timeout_score: float = 0) -> bool:
 
-    correctness = getCorrectness(model_name, model_output, ground_truth)
+    correctness = getCorrectness(model_name, model_output, ground_truth) * 4
 
     soft_format_score = get_soft_format_score(model_name, model_output)
     hard_format_score = get_hard_format_score(model_name, model_output)

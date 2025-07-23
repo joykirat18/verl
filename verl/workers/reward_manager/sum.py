@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections import defaultdict
+from statistics import median
 
 import torch
 
@@ -21,6 +22,8 @@ from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
 import json
 import numpy as np
+import os
+import math
 
 @register("sum")
 class SumRewardManager:
@@ -48,7 +51,7 @@ class SumRewardManager:
     def compute_standardized_deviation(self, length, mean_length, std_length, epsilon=1e-6):
         return abs(length - mean_length) / (std_length + epsilon)
 
-    def accuracy_reward(self, length, mean_length, std_length, alpha=0.1, epsilon=1e-6):
+    def accuracy_reward_distribution(self, length, mean_length, std_length, alpha=0.1, epsilon=1e-6, difficulty_scale=1.0):
         """
         Compute accuracy reward with comprehensive debugging.
         """
@@ -65,24 +68,96 @@ class SumRewardManager:
         z = abs(length - mean_length) / (std_length + epsilon)
         
         # Compute reward
-        reward = np.exp(-alpha * z)
+        reward = np.exp(-1 * z)
         
-        # Final check for NaN
-        if np.isnan(reward):
-            return 1.0
         
-        return reward
+        return difficulty_scale * reward
+    
+    def accuracy_reward(self, length, previous_length_list, difficulty_scale=None, alpha=0.1, epsilon=1e-6, return_L_norm=False):
+
+        try:
+            L_min = np.min(previous_length_list)
+            L_max = np.max(previous_length_list)
+            median = np.median(previous_length_list)
+        except Exception as e:
+            print(f"Error: previous_length_list is empty: {e}")
+            return 0
+
+        L_norm = (L_max - length) / (L_max - L_min + epsilon)
+
+        if (length < median):
+            L_norm = 1.0
+
+        reward = difficulty_scale * L_norm
+
+        if return_L_norm:
+            return reward, L_norm
+        else:
+            return reward
+    
+    def length_reward(
+        self,
+        length: int,
+        previous_length_list: list,
+        difficulty_scale: float | None = None,
+        epsilon: float = 1e-6,
+        return_L_norm: bool = False,
+):
+        try:
+            L_min = np.min(previous_length_list)
+            L_max = np.max(previous_length_list)
+            median = np.median(previous_length_list)
+        except Exception as e:
+            print(f"Error: previous_length_list is empty: {e}")
+            return 0
+
+        span = max(L_max - L_min, epsilon)
+        L_norm = (L_max - length) / span
+        L_norm = max(0.0, min(1.0, L_norm))          # clamp
+
+        # smooth bonus for being shorter than median (sigmoid, not cliff)
+        soft_bonus = 1 / (1 + math.exp((length - median) / (0.1 * median)))
+        L_norm = max(L_norm, soft_bonus)
+
+        reward = difficulty_scale * L_norm
+
+        return (reward, L_norm) if return_L_norm else reward
+
+        
+    def get_difficulty_class(self, difficulty):
+        if difficulty == None:
+            return "unknown"
+        if difficulty >= 0.8:
+            difficulty_category = 'easy'
+        elif difficulty >= 0.3:
+            difficulty_category = 'medium'
+        elif difficulty >= 0:
+            difficulty_category = 'hard'
+        else:
+            difficulty_category = 'unknown'
+        return difficulty_category
+
+    def get_difficulty_scale(self, difficulty_category):
+        if difficulty_category == 'easy':
+            difficulty_scale = 2.0
+        elif difficulty_category == 'medium':
+            difficulty_scale = 1.0
+        elif difficulty_category == 'hard':
+            difficulty_scale = 0.25
+        else:
+            difficulty_scale = 0
+        return difficulty_scale
 
 
-    def get_matching_length_list(self, data, valid_prompt_ids):
-        """Get the list of lengths of responses that match the valid prompt ids and is correct"""
+    def get_matching_length_list(self, data, uuid):
+        """Get the list of lengths of responses that match the valid prompt ids and are correct"""
         matching_lengths = []
         for item in data:
-            if torch.equal(item['input_id'], valid_prompt_ids) and item['score']['score'] > 0:
+            if item['uuid'] == uuid and item['score']['score'] > 0:
                 matching_lengths.append(item['sequence_length'])
         return matching_lengths
 
-    def __call__(self, data: DataProto, curr_save_path=None, return_dict=False):
+    def __call__(self, data: DataProto, curr_save_path=None, return_dict=False, response_length_path=None):
         """We will expand this function gradually based on the available datasets"""
 
         if curr_save_path is not None:
@@ -105,6 +180,8 @@ class SumRewardManager:
 
 
         score_info = []
+
+        difficulty_data_wise_length = {}
 
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
@@ -155,6 +232,8 @@ class SumRewardManager:
             data_source = data_item.non_tensor_batch[self.reward_fn_key]
             extra_info = data_item.non_tensor_batch.get("extra_info", {})
             num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
+            difficulty = data_item.non_tensor_batch.get("difficulty", None)
+            uuid = data_item.non_tensor_batch.get("uuid", None)
             extra_info["num_turns"] = num_turns
 
             score = self.compute_score(
@@ -164,8 +243,27 @@ class SumRewardManager:
                 model_name=self.model_name,
             )
 
-            score_info.append({'score': score, 'solution_str': response_str, 'ground_truth': ground_truth, 'sequence_length': valid_response_length, 'input_id': valid_prompt_ids})
+            difficulty_category = self.get_difficulty_class(difficulty)
 
+            if f'{data_source}_{difficulty_category}' not in difficulty_data_wise_length:
+                difficulty_data_wise_length[f'{data_source}_{difficulty_category}'] = []
+            if score['score'] > 0:
+                difficulty_data_wise_length[f'{data_source}_{difficulty_category}'].append(valid_response_length)
+
+
+            score_info.append({'score': score, 'solution_str': response_str, 'ground_truth': ground_truth, 'sequence_length': valid_response_length, 'input_id': valid_prompt_ids, 'difficulty': difficulty, 'uuid': uuid})
+
+        if self.rewardType == 'train':
+            for key, value in difficulty_data_wise_length.items():
+                if os.path.exists(os.path.join(response_length_path, f"{key}.json")):
+                    with open(os.path.join(response_length_path, f"{key}.json"), "r") as f:
+                        difficulty_data_wise_length[key] = json.load(f)
+                else:
+                    difficulty_data_wise_length[key] = []
+                difficulty_data_wise_length[key].append(value)
+                with open(os.path.join(response_length_path, f"{key}.json"), "w") as f:
+                    json.dump(difficulty_data_wise_length[key], f)
+        
         for i in range(len(data)):
 
             data_item = data[i]  # DataProtoItem
@@ -219,21 +317,50 @@ class SumRewardManager:
             extra_info["num_turns"] = num_turns
 
             scores = score_info[i]
-            valid_prompt_ids = scores['input_id']
-            correct_matching_lengths = self.get_matching_length_list(score_info, valid_prompt_ids)
 
-            mu = np.mean(correct_matching_lengths)
-            sigma = np.std(correct_matching_lengths)
-
+            # L_norm = None
             length = scores['sequence_length']
 
             if self.rewardType == 'val':
-                reward = scores['score']['score']
+                if scores['score']['score'] > 0:
+                    reward = 1
+                else:
+                    reward = 0
                 reason = f"score: {scores['score']}"
             elif self.rewardType == 'train':
-                reward = scores['score']['score'] * self.accuracy_reward(length, mu, sigma) + scores['score']['soft_format'] + scores['score']['hard_format']
-                reason = f"score: {scores['score']}, accuracy_reward: {self.accuracy_reward(length, mu, sigma)}"
-                scores['score']['accuracy_reward'] = self.accuracy_reward(length, mu, sigma)
+
+                uuid = scores['uuid']
+                difficulty = scores['difficulty']
+                difficulty_category = self.get_difficulty_class(difficulty)
+                difficulty_scale = self.get_difficulty_scale(difficulty_category)
+
+                if os.path.exists(os.path.join(response_length_path, f"{data_source}_{difficulty_category}.json")):
+                    with open(os.path.join(response_length_path, f"{data_source}_{difficulty_category}.json"), "r") as f:
+                        global_length_list = json.load(f)
+                else:
+                    global_length_list = []
+
+                previous_length_list = global_length_list[-10:]
+
+                previous_length_list_flattened = []
+                for length_list in previous_length_list:
+                    if len(length_list) > 0:
+                        previous_length_list_flattened.extend(length_list)
+
+                mean_length = np.mean(previous_length_list_flattened)
+                std_length = np.std(previous_length_list_flattened)
+                # median_length = np.median(previous_length_list_flattened)
+                # L_min = np.min(previous_length_list_flattened)
+                # L_max = np.max(previous_length_list_flattened)
+                
+                reward = scores['score']['score'] + scores['score']['soft_format'] + scores['score']['hard_format']
+                # if scores['score']['score'] > 0:
+                    # reward += self.accuracy_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale)
+                    # reward += self.accuracy_reward_distribution(length, mean_length, std_length, difficulty_scale=difficulty_scale)
+                    # _, L_norm = self.accuracy_reward(length, L_min, L_max, difficulty, return_L_norm=True)
+                reason = f"score: {scores['score']}"
+                # scores['score']['accuracy_reward'] = self.accuracy_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale)
+                # scores['score']['accuracy_reward_distribution'] = self.accuracy_reward_distribution(length, mean_length, std_length, difficulty_scale=difficulty_scale)
                 for key, value in scores['score'].items():
                     reward_extra_info[key].append(value)
 
@@ -247,7 +374,10 @@ class SumRewardManager:
                     'response': response_str,
                     'ground_truth': ground_truth,
                     'score': scores['score'],
+                    'difficulty': scores['difficulty'],
                     'reason': reason,
+                    'final_reward': reward,
+                    # 'L_norm': L_norm,
                 }
                 save_file.write(json.dumps(save_json_line, ensure_ascii=False) + '\n')
 

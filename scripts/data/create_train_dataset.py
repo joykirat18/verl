@@ -22,6 +22,7 @@ Preprocess the MATH-lighteval dataset to parquet format
 
 import argparse
 import os
+import uuid
 
 os.environ["HF_HOME"] = "/nas-ssd2/joykirat/.cache/huggingface"
 os.environ["UV_CACHE_DIR"] = "/nas-ssd2/joykirat/.cache/uv"
@@ -61,6 +62,7 @@ def curate_numina_dataset():
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": solution},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
             return data
 
@@ -103,11 +105,13 @@ def curate_arc_dataset(data_source):
     # combine dataset
     dataset = datasets.concatenate_datasets([dataset['train'], dataset['validation']])
 
-    TEMPLATE = (
-        "Answer the following multiple choice question. The last line of your response should be of the following "
-        "format: 'Answer: $LETTER' (without quotes) where LETTER is one of {letter}. Think step by step before "
-        "answering.\n\n{Question}\n\n{Choices}"
-    )
+    # TEMPLATE = (
+    #     "Answer the following multiple choice question. The last line of your response should be of the following "
+    #     "format: 'Answer: $LETTER' (without quotes) where LETTER is one of {letter}. Think step by step before "
+    #     "answering.\n\n{Question}\n\n{Choices}"
+    # )
+
+    TEMPLATE = "{Question}\n\n{Choices}"
 
 
     # add a row to each data item that represents a unique id
@@ -126,7 +130,7 @@ def curate_arc_dataset(data_source):
             choices = [f"{choices['label'][i]}) {choices['text'][i]}" for i in range(number_of_choices)]
             choices = "\n".join(choices)
 
-            question = TEMPLATE.format(letter=letter, Question=question, Choices=choices)
+            question = TEMPLATE.format(Question=question, Choices=choices) + "\n\nLet's think step by step and output the final answer within \\boxed{}."
 
             answerKey = example.pop("answerKey")
             data = {
@@ -135,6 +139,7 @@ def curate_arc_dataset(data_source):
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": answerKey},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
 
             return data
@@ -154,11 +159,13 @@ def curate_commonsense_dataset():
     # combine dataset
     dataset = dataset['train']
 
-    TEMPLATE = (
-        "Answer the following multiple choice question. The last line of your response should be of the following "
-        "format: 'Answer: $LETTER' (without quotes) where LETTER is one of {letter}. Think step by step before "
-        "answering.\n\n{Question}\n\n{Choices}"
-    )
+    # TEMPLATE = (
+    #     "Answer the following multiple choice question. The last line of your response should be of the following "
+    #     "format: 'Answer: $LETTER' (without quotes) where LETTER is one of {letter}. Think step by step before "
+    #     "answering.\n\n{Question}\n\n{Choices}"
+    # )
+
+    TEMPLATE = "{Question}\n\n{Choices}"
 
 
     # add a row to each data item that represents a unique id
@@ -177,15 +184,17 @@ def curate_commonsense_dataset():
             choices = [f"{choices['label'][i]}) {choices['text'][i]}" for i in range(number_of_choices)]
             choices = "\n".join(choices)
 
-            question = TEMPLATE.format(letter=letter, Question=question, Choices=choices)
+            question = TEMPLATE.format(Question=question, Choices=choices) + "\n\nLet's think step by step and output the final answer within \\boxed{}."
 
             answerKey = example.pop("answerKey")
+
             data = {
                 "data_source": data_source,
                 "prompt": [{"role": "user", "content": question}],
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": answerKey},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
             # only keep entries in 
 
@@ -206,7 +215,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    commonesesnse_dataset = curate_commonsense_dataset()
+    # commonesesnse_dataset = curate_commonsense_dataset()
     # arc_easy_dataset = curate_arc_dataset('ARC-Easy')
     # arc_challenge_dataset = curate_arc_dataset('ARC-Challenge')
 
@@ -215,11 +224,11 @@ if __name__ == "__main__":
     # arc_combined_dataset = datasets.concatenate_datasets([arc_easy_dataset, arc_challenge_dataset])
     # arc_combined_dataset = arc_combined_dataset.shuffle(seed=42).select(range(len(math_dataset)))
 
-    commonesesnse_dataset = commonesesnse_dataset.shuffle(seed=42).select(range(len(math_dataset)))
-    print("Total length of commonsense dataset: ", len(commonesesnse_dataset))
+    # commonesesnse_dataset = commonesesnse_dataset.shuffle(seed=42).select(range(len(math_dataset)))
+    # print("Total length of commonsense dataset: ", len(commonesesnse_dataset))
     print("Total length of math dataset: ", len(math_dataset))
 
-    dataset = datasets.concatenate_datasets([math_dataset, commonesesnse_dataset])
+    dataset = datasets.concatenate_datasets([math_dataset])
 
     # shuffle the dataset
     dataset = dataset.shuffle(seed=42)

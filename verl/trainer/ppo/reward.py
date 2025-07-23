@@ -138,7 +138,7 @@ def load_reward_manager(config, tokenizer, num_examine, **reward_kwargs):
     )
 
 
-def compute_reward(data: DataProto, reward_fn, curr_save_path=None):
+def compute_reward(data: DataProto, reward_fn, curr_save_path=None, response_length_path=None):
     """
     Compute reward for a batch of data.
     Args:
@@ -148,12 +148,12 @@ def compute_reward(data: DataProto, reward_fn, curr_save_path=None):
         Tuple of reward tensor and extra info dictionary.
     """
     try:
-        reward_result = reward_fn(data, return_dict=True, curr_save_path=curr_save_path)
+        reward_result = reward_fn(data, return_dict=True, curr_save_path=curr_save_path, response_length_path=response_length_path)
         reward_tensor = reward_result["reward_tensor"]
         reward_extra_infos_dict = reward_result.get("reward_extra_info", {})
     except Exception as e:
         print(f"Error in reward_fn: {e}")
-        reward_tensor = reward_fn(data, curr_save_path=curr_save_path)
+        reward_tensor = reward_fn(data, curr_save_path=curr_save_path, response_length_path=response_length_path)
         reward_extra_infos_dict = {}
 
     return reward_tensor, reward_extra_infos_dict

@@ -23,6 +23,7 @@ Preprocess the MATH-lighteval dataset to parquet format
 import argparse
 import os
 import random
+import uuid
 
 os.environ["HF_HOME"] = "/nas-ssd2/joykirat/.cache/huggingface"
 os.environ["UV_CACHE_DIR"] = "/nas-ssd2/joykirat/.cache/uv"
@@ -66,6 +67,7 @@ def curate_aime_dataset():
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": solution},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
             # breakpoint()
             return data
@@ -100,6 +102,7 @@ def curate_olympiad_dataset():
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": answer[0]},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
             # breakpoint()
             return data
@@ -133,6 +136,7 @@ def curate_amc_dataset():
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": str(answer)},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
             return data
 
@@ -151,11 +155,12 @@ def curate_commonsense_dataset():
 
     dataset = dataset['validation']
 
-    TEMPLATE = (
-        "Answer the following multiple choice question. The last line of your response should be of the following "
-        "format: 'Answer: $LETTER' (without quotes) where LETTER is one of {letter}. Think step by step before "
-        "answering.\n\n{Question}\n\n{Choices}"
-    )
+    # TEMPLATE = (
+    #     # "Answer the following multiple choice question. The last line of your response should be of the following "
+    #     # "format: 'Answer: $LETTER' (without quotes) where LETTER is one of {letter}. Think step by step before "
+    #     "{Question}\n\n{Choices}\n\nLet's think step by step and output the final answer within \\boxed{}."
+    # )
+    TEMPLATE = "{Question}\n\n{Choices}"
 
 
     # add a row to each data item that represents a unique id
@@ -174,7 +179,7 @@ def curate_commonsense_dataset():
             choices = [f"{choices['label'][i]}) {choices['text'][i]}" for i in range(number_of_choices)]
             choices = "\n".join(choices)
 
-            question = TEMPLATE.format(letter=letter, Question=question, Choices=choices)
+            question = TEMPLATE.format(Question=question, Choices=choices) + "\n\nLet's think step by step and output the final answer within \\boxed{}."
 
             answerKey = example.pop("answerKey")
             data = {
@@ -183,6 +188,7 @@ def curate_commonsense_dataset():
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": answerKey},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
             # only keep entries in 
 
@@ -202,11 +208,12 @@ def curate_gpqa_dataset():
 
     dataset = dataset['train']
 
-    GPQA_QUERY_TEMPLATE = (
-        "Answer the following multiple choice question. The last line of your response should be of the following "
-        "format: 'Answer: $LETTER' (without quotes) where LETTER is one of ABCD. Think step by step before "
-        "answering.\n\n{Question}\n\nA) {A}\nB) {B}\nC) {C}\nD) {D}"
-    )
+    # GPQA_QUERY_TEMPLATE = (
+    #     # "Answer the following multiple choice question. The last line of your response should be of the following "
+    #     # "format: 'Answer: $LETTER' (without quotes) where LETTER is one of ABCD. Think step by step before "
+    #     "{Question}\n\nA) {A}\nB) {B}\nC) {C}\nD) {D}\n\nLet's think step by step and output the final answer within \\boxed{}."
+    # )
+    GPQA_QUERY_TEMPLATE = "{Question}\n\nA) {A}\nB) {B}\nC) {C}\nD) {D}"
 
 
     # add a row to each data item that represents a unique id
@@ -219,7 +226,7 @@ def curate_gpqa_dataset():
             choices.insert(gold_index, example["Correct Answer"])
             query_prompt = GPQA_QUERY_TEMPLATE.format(
                 A=choices[0], B=choices[1], C=choices[2], D=choices[3], Question=example["Question"]
-            )
+            ) + "\n\nLet's think step by step and output the final answer within \\boxed{}."
 
             gold_choice = "ABCD"[gold_index]
 
@@ -229,6 +236,7 @@ def curate_gpqa_dataset():
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": gold_choice},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
 
             return data
@@ -278,6 +286,7 @@ def curate_arc_dataset(data_source):
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": answerKey},
                 "extra_info": {"split": split, "index": idx},
+                "uuid": str(uuid.uuid4()),
             }
 
             return data
@@ -314,7 +323,7 @@ if __name__ == "__main__":
     # arc_challenge_dataset = arc_challenge_dataset.shuffle(seed=42).select(range(50))
 
 
-    dataset = datasets.concatenate_datasets([amc_dataset, commonsense_dataset, gpqa_dataset, olympiad_dataset])
+    dataset = datasets.concatenate_datasets([amc_dataset, olympiad_dataset])
 
     # shuffle the dataset
     dataset = dataset.shuffle(seed=42)

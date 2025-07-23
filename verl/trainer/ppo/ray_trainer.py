@@ -767,7 +767,7 @@ class RayPPOTrainer:
             test_batch.meta_info["validate"] = True
 
             # evaluate using reward_function
-            result = self.val_reward_fn(test_batch, return_dict=True, curr_save_path=os.path.join(self.config.trainer.rollout_save_path, f'val_{self.global_steps}.jsonl'))
+            result = self.val_reward_fn(test_batch, return_dict=True, curr_save_path=os.path.join(self.config.trainer.rollout_save_path, f'val_{self.global_steps}.jsonl'), response_length_path=self.config.trainer.default_local_dir)
             reward_tensor = result["reward_tensor"]
             scores = reward_tensor.sum(-1).cpu().tolist()
             sample_scores.extend(scores)
@@ -1131,6 +1131,7 @@ class RayPPOTrainer:
                 # pop those keys for generation
                 batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
                 non_tensor_batch_keys_to_pop = ["raw_prompt_ids"]
+                non_tensor_batch_keys = []
                 if "multi_modal_data" in batch.non_tensor_batch:
                     non_tensor_batch_keys_to_pop.append("multi_modal_data")
                 if "raw_prompt" in batch.non_tensor_batch:
@@ -1143,11 +1144,20 @@ class RayPPOTrainer:
                     non_tensor_batch_keys_to_pop.append("index")
                 if "agent_name" in batch.non_tensor_batch:
                     non_tensor_batch_keys_to_pop.append("agent_name")
+                if 'data_source' in batch.non_tensor_batch:
+                    non_tensor_batch_keys.append('data_source')
+                if 'reward_model' in batch.non_tensor_batch:
+                    non_tensor_batch_keys.append('reward_model')
+                if 'uuid' in batch.non_tensor_batch:
+                    non_tensor_batch_keys.append('uuid')
+                
 
                 gen_batch = batch.pop(
                     batch_keys=batch_keys_to_pop,
                     non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
                 )
+                gen_batch.non_tensor_batch.update({k: np.array(v) for k, v in batch.non_tensor_batch.items() if k in non_tensor_batch_keys})
+
 
                 # pass global_steps to trace
                 gen_batch.meta_info["global_steps"] = self.global_steps
@@ -1211,7 +1221,7 @@ class RayPPOTrainer:
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn, curr_save_path=os.path.join(self.config.trainer.rollout_save_path, f'train_{self.global_steps}.jsonl'))
+                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn, curr_save_path=os.path.join(self.config.trainer.rollout_save_path, f'train_{self.global_steps}.jsonl'), response_length_path=self.config.trainer.default_local_dir)
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
