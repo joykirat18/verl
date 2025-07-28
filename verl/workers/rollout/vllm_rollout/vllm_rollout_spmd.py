@@ -136,6 +136,7 @@ class vLLMRollout(BaseRollout):
             )
 
         max_model_len = int(config.max_model_len or config.prompt_length + config.response_length)
+        max_num_batched_tokens = max(max_num_batched_tokens, max_model_len)
 
         if max_num_batched_tokens < max_model_len and self.config.enable_chunked_prefill:
             raise ValueError(
@@ -320,7 +321,7 @@ class vLLMRollout(BaseRollout):
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
                 lora_request=lora_requests,
-                use_tqdm=False,
+                use_tqdm=True,
             )
 
             # TODO(sgm): disable logprob when recompute_log_prob is enable

@@ -18,6 +18,13 @@ Preprocess the GSM8k dataset to parquet format
 import argparse
 import os
 import re
+import argparse
+import os
+import uuid
+
+os.environ["HF_HOME"] = "/nas-ssd2/joykirat/.cache/huggingface"
+os.environ["UV_CACHE_DIR"] = "/nas-ssd2/joykirat/.cache/uv"
+os.environ["RAY_TMPDIR"] = "/nas-ssd2/joykirat/tmp_ray"
 
 import datasets
 
@@ -34,7 +41,7 @@ def extract_solution(solution_str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default="~/data/gsm8k")
+    parser.add_argument("--local_dir", default="data/gsm8k")
     parser.add_argument("--hdfs_dir", default=None)
 
     args = parser.parse_args()
@@ -77,6 +84,8 @@ if __name__ == "__main__":
             return data
 
         return process_fn
+    
+    test_dataset = test_dataset.shuffle(seed=23).select(range(100))
 
     train_dataset = train_dataset.map(function=make_map_fn("train"), with_indices=True)
     test_dataset = test_dataset.map(function=make_map_fn("test"), with_indices=True)
