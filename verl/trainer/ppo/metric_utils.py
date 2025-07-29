@@ -103,6 +103,9 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     """
     sequence_score = batch.batch["token_level_scores"].sum(-1)
     sequence_reward = batch.batch["token_level_rewards"].sum(-1)
+    sequence_reward_correctness = batch.batch["token_level_rewards_correctness"].sum(-1)
+    sequence_reward_format = batch.batch["token_level_rewards_format"].sum(-1)
+    sequence_reward_length = batch.batch["token_level_rewards_length"].sum(-1)
 
     advantages = batch.batch["advantages"]
     returns = batch.batch["returns"]
@@ -136,6 +139,15 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "critic/rewards/mean": torch.mean(sequence_reward).detach().item(),
         "critic/rewards/max": torch.max(sequence_reward).detach().item(),
         "critic/rewards/min": torch.min(sequence_reward).detach().item(),
+        "critic/rewards_correctness/mean": torch.mean(sequence_reward_correctness).detach().item(),
+        "critic/rewards_correctness/max": torch.max(sequence_reward_correctness).detach().item(),
+        "critic/rewards_correctness/min": torch.min(sequence_reward_correctness).detach().item(),
+        "critic/rewards_format/mean": torch.mean(sequence_reward_format).detach().item(),
+        "critic/rewards_format/max": torch.max(sequence_reward_format).detach().item(),
+        "critic/rewards_format/min": torch.min(sequence_reward_format).detach().item(),
+        "critic/rewards_length/mean": torch.mean(sequence_reward_length).detach().item(),
+        "critic/rewards_length/max": torch.max(sequence_reward_length).detach().item(),
+        "critic/rewards_length/min": torch.min(sequence_reward_length).detach().item(),
         # adv
         "critic/advantages/mean": torch.mean(valid_adv).detach().item(),
         "critic/advantages/max": torch.max(valid_adv).detach().item(),

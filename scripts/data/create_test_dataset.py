@@ -73,7 +73,7 @@ def curate_aime_dataset():
             return data
 
         return process_fn
-    
+
     dataset = dataset.map(function=make_map_fn("test"), with_indices=True, remove_columns=dataset.column_names)
 
     return dataset
@@ -108,7 +108,7 @@ def curate_olympiad_dataset():
             return data
 
         return process_fn
-    
+
     dataset = dataset.map(function=make_map_fn("test"), with_indices=True, remove_columns=dataset.column_names)
 
     return dataset
@@ -141,11 +141,11 @@ def curate_amc_dataset():
             return data
 
         return process_fn
-    
+
     dataset = dataset.map(function=make_map_fn("test"), with_indices=True, remove_columns=dataset.column_names) 
 
     return dataset
-    
+
 
 def curate_commonsense_dataset():
     huggingface_data = 'tau/commonsense_qa'
@@ -195,7 +195,7 @@ def curate_commonsense_dataset():
             return data
 
         return process_fn
-    
+
     dataset = dataset.map(function=make_map_fn("test"), with_indices=True, remove_columns=dataset.column_names)
 
     return dataset
@@ -219,7 +219,7 @@ def curate_gpqa_dataset():
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
         def process_fn(example, idx):
-            
+
             choices = [example["Incorrect Answer 1"], example["Incorrect Answer 2"], example["Incorrect Answer 3"]]
             random.shuffle(choices)
             gold_index = random.randint(0, 3)
@@ -242,7 +242,7 @@ def curate_gpqa_dataset():
             return data
 
         return process_fn
-    
+
     dataset = dataset.map(function=make_map_fn("test"), with_indices=True, remove_columns=dataset.column_names)
 
     return dataset
@@ -292,11 +292,11 @@ def curate_arc_dataset(data_source):
             return data
 
         return process_fn
-    
+
     dataset = dataset.map(function=make_map_fn("test"), with_indices=True, remove_columns=dataset.column_names)
 
     return dataset
-    
+
 
 
 if __name__ == "__main__":
@@ -306,24 +306,24 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # aime_dataset = curate_aime_dataset()
+    aime_dataset = curate_aime_dataset()
     amc_dataset = curate_amc_dataset()
-    commonsense_dataset = curate_commonsense_dataset()
+    # commonsense_dataset = curate_commonsense_dataset()
     gpqa_dataset = curate_gpqa_dataset()
-    olympiad_dataset = curate_olympiad_dataset()
+    # olympiad_dataset = curate_olympiad_dataset()
     # arc_easy_dataset = curate_arc_dataset('ARC-Easy')
     # arc_challenge_dataset = curate_arc_dataset('ARC-Challenge')
-    
-    # aime_dataset = aime_dataset.shuffle(seed=42).select(range(50))
+
+    aime_dataset = aime_dataset.shuffle(seed=42).select(range(50))
     amc_dataset = amc_dataset.shuffle(seed=42).select(range(50))
-    commonsense_dataset = commonsense_dataset.shuffle(seed=42).select(range(50))
+    # commonsense_dataset = commonsense_dataset.shuffle(seed=42).select(range(50))
     gpqa_dataset = gpqa_dataset.shuffle(seed=42).select(range(50))
-    olympiad_dataset = olympiad_dataset.shuffle(seed=42).select(range(50))
+    # olympiad_dataset = olympiad_dataset.shuffle(seed=42).select(range(50))
     # arc_easy_dataset = arc_easy_dataset.shuffle(seed=42).select(range(50))
     # arc_challenge_dataset = arc_challenge_dataset.shuffle(seed=42).select(range(50))
 
 
-    dataset = datasets.concatenate_datasets([amc_dataset, olympiad_dataset])
+    dataset = datasets.concatenate_datasets([amc_dataset, aime_dataset, gpqa_dataset])
 
     # shuffle the dataset
     dataset = dataset.shuffle(seed=42)

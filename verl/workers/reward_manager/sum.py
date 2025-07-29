@@ -102,13 +102,14 @@ class SumRewardManager:
         difficulty_scale: float | None = None,
         epsilon: float = 1e-6,
         return_L_norm: bool = False,
+        difficulty=None,
 ):
         try:
             L_min = np.min(previous_length_list)
             L_max = np.max(previous_length_list)
             median = np.median(previous_length_list)
         except Exception as e:
-            print(f"Error: previous_length_list is empty: {e}")
+            print(f"Error: previous_length_list is empty: {e}, {difficulty}")
             return 0
 
         span = max(L_max - L_min, epsilon)
@@ -139,9 +140,9 @@ class SumRewardManager:
 
     def get_difficulty_scale(self, difficulty_category):
         if difficulty_category == 'easy':
-            difficulty_scale = 2.0
-        elif difficulty_category == 'medium':
             difficulty_scale = 1.0
+        elif difficulty_category == 'medium':
+            difficulty_scale = 0.5
         elif difficulty_category == 'hard':
             difficulty_scale = 0.25
         else:
@@ -172,7 +173,12 @@ class SumRewardManager:
             else:
                 return data.batch["rm_scores"]
 
+        # breakpoint()
+
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        reward_tensor_correctness = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        reward_tensor_format = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        reward_tensor_length = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
 
         if save_path is not None:
@@ -188,6 +194,11 @@ class SumRewardManager:
 
             prompt_ids = data_item.batch["prompts"]
 
+            if 'difficulty' in data_item.batch:
+                difficulty = data_item.batch['difficulty'][0].item()
+            else:
+                difficulty = None
+            
             prompt_length = prompt_ids.shape[-1]
 
             valid_prompt_length = data_item.batch["attention_mask"][:prompt_length].sum()
@@ -232,7 +243,6 @@ class SumRewardManager:
             data_source = data_item.non_tensor_batch[self.reward_fn_key]
             extra_info = data_item.non_tensor_batch.get("extra_info", {})
             num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
-            difficulty = data_item.non_tensor_batch.get("difficulty", None)
             uuid = data_item.non_tensor_batch.get("uuid", None)
             extra_info["num_turns"] = num_turns
 
@@ -321,11 +331,16 @@ class SumRewardManager:
             # L_norm = None
             length = scores['sequence_length']
 
+            correctness_reward = 0
+            format_reward = 0
+            length_reward = 0
+
             if self.rewardType == 'val':
                 if scores['score']['score'] > 0:
-                    reward = 1
+                    correctness_reward = 1
                 else:
-                    reward = 0
+                    correctness_reward = 0
+                reward = correctness_reward + format_reward + length_reward 
                 reason = f"score: {scores['score']}"
             elif self.rewardType == 'train':
 
@@ -347,25 +362,30 @@ class SumRewardManager:
                     if len(length_list) > 0:
                         previous_length_list_flattened.extend(length_list)
 
-                mean_length = np.mean(previous_length_list_flattened)
-                std_length = np.std(previous_length_list_flattened)
+                # mean_length = np.mean(previous_length_list_flattened)
+                # std_length = np.std(previous_length_list_flattened)
                 # median_length = np.median(previous_length_list_flattened)
                 # L_min = np.min(previous_length_list_flattened)
                 # L_max = np.max(previous_length_list_flattened)
+
+                correctness_reward = scores['score']['score']
+                format_reward = scores['score']['soft_format'] + scores['score']['hard_format']
+                length_reward = self.length_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale, difficulty=difficulty)
+
+                if correctness_reward == 0:
+                    length_reward = 0
                 
-                reward = scores['score']['score'] + scores['score']['soft_format'] + scores['score']['hard_format']
-                # if scores['score']['score'] > 0:
-                    # reward += self.accuracy_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale)
-                    # reward += self.accuracy_reward_distribution(length, mean_length, std_length, difficulty_scale=difficulty_scale)
-                    # _, L_norm = self.accuracy_reward(length, L_min, L_max, difficulty, return_L_norm=True)
+                reward = correctness_reward + format_reward + length_reward
                 reason = f"score: {scores['score']}"
-                # scores['score']['accuracy_reward'] = self.accuracy_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale)
-                # scores['score']['accuracy_reward_distribution'] = self.accuracy_reward_distribution(length, mean_length, std_length, difficulty_scale=difficulty_scale)
+                scores['score']['length_reward'] = length_reward
                 for key, value in scores['score'].items():
                     reward_extra_info[key].append(value)
 
 
             reward_tensor[i, valid_response_length - 1] = reward
+            reward_tensor_correctness[i, valid_response_length - 1] = correctness_reward
+            reward_tensor_format[i, valid_response_length - 1] = format_reward
+            reward_tensor_length[i, valid_response_length - 1] = length_reward
 
             if save_path is not None:
                 save_json_line = {
@@ -377,7 +397,6 @@ class SumRewardManager:
                     'difficulty': scores['difficulty'],
                     'reason': reason,
                     'final_reward': reward,
-                    # 'L_norm': L_norm,
                 }
                 save_file.write(json.dumps(save_json_line, ensure_ascii=False) + '\n')
 
@@ -385,6 +404,9 @@ class SumRewardManager:
             return {
                 "reward_tensor": reward_tensor,
                 "reward_extra_info": reward_extra_info,
+                "reward_tensor_correctness": reward_tensor_correctness,
+                "reward_tensor_format": reward_tensor_format,
+                "reward_tensor_length": reward_tensor_length,
             }
         else:
-            return reward_tensor
+            return reward_tensor, reward_tensor_correctness, reward_tensor_format, reward_tensor_length

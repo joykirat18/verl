@@ -150,13 +150,16 @@ def compute_reward(data: DataProto, reward_fn, curr_save_path=None, response_len
     try:
         reward_result = reward_fn(data, return_dict=True, curr_save_path=curr_save_path, response_length_path=response_length_path)
         reward_tensor = reward_result["reward_tensor"]
+        reward_tensor_correctness = reward_result["reward_tensor_correctness"]
+        reward_tensor_format = reward_result["reward_tensor_format"]
+        reward_tensor_length = reward_result["reward_tensor_length"]
         reward_extra_infos_dict = reward_result.get("reward_extra_info", {})
     except Exception as e:
         print(f"Error in reward_fn: {e}")
         reward_tensor = reward_fn(data, curr_save_path=curr_save_path, response_length_path=response_length_path)
         reward_extra_infos_dict = {}
 
-    return reward_tensor, reward_extra_infos_dict
+    return reward_tensor, reward_tensor_correctness, reward_tensor_format, reward_tensor_length, reward_extra_infos_dict
 
 
 @ray.remote(num_cpus=1)

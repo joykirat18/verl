@@ -1221,7 +1221,7 @@ class RayPPOTrainer:
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn, curr_save_path=os.path.join(self.config.trainer.rollout_save_path, f'train_{self.global_steps}.jsonl'), response_length_path=self.config.trainer.default_local_dir)
+                            reward_tensor, reward_tensor_correctness, reward_tensor_format, reward_tensor_length, reward_extra_infos_dict = compute_reward(batch, self.reward_fn, curr_save_path=os.path.join(self.config.trainer.rollout_save_path, f'train_{self.global_steps}.jsonl'), response_length_path=self.config.trainer.default_local_dir)
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
@@ -1280,6 +1280,9 @@ class RayPPOTrainer:
                         if self.config.reward_model.launch_reward_fn_async:
                             reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
                         batch.batch["token_level_scores"] = reward_tensor
+                        batch.batch["token_level_scores_correctness"] = reward_tensor_correctness
+                        batch.batch["token_level_scores_format"] = reward_tensor_format
+                        batch.batch["token_level_scores_length"] = reward_tensor_length
 
                         if reward_extra_infos_dict:
                             batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
@@ -1292,6 +1295,9 @@ class RayPPOTrainer:
                             metrics.update(kl_metrics)
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
+                            batch.batch["token_level_rewards_correctness"] = batch.batch["token_level_scores_correctness"]
+                            batch.batch["token_level_rewards_format"] = batch.batch["token_level_scores_format"]
+                            batch.batch["token_level_rewards_length"] = batch.batch["token_level_scores_length"]
 
                         # compute advantages, executed on the driver process
 

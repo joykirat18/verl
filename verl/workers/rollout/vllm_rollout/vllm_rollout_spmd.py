@@ -233,10 +233,10 @@ class vLLMRollout(BaseRollout):
         # Check if tree mode is enabled
         is_validate = prompts.meta_info.get("validate", False)
 
-        # if is_validate:
-        return self.generate_original_sequences(prompts, **kwargs)
-        # else:
-        #     return self.generate_summarization_sequences(prompts, **kwargs)
+        if is_validate:
+            return self.generate_original_sequences(prompts, **kwargs)
+        else:
+            return self.generate_summarization_sequences(prompts, **kwargs)
 
 
     @GPUMemoryLogger(role="vllm rollout spmd", logger=logger)
@@ -442,7 +442,6 @@ class vLLMRollout(BaseRollout):
         data_source_list = non_tensor_batch['data_source']
         reward_model_list = non_tensor_batch['reward_model']
         uuid_list = non_tensor_batch['uuid']
-        difficulty_list = []
         
 
         if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
@@ -545,8 +544,6 @@ class vLLMRollout(BaseRollout):
                         score_list.append(0)
                 uuid_difficulty[id] = sum(score_list) / len(score_list)
         
-            for uuid in uuid_list:
-                difficulty_list.append(uuid_difficulty[uuid])
 
             # breakpoint()
             
@@ -555,10 +552,13 @@ class vLLMRollout(BaseRollout):
             for res in response:
                 prompt_ids = res["prompt_ids"]
                 response_ids = res["response_ids"]
+                uuid = res["uuid"]
+                difficulty = uuid_difficulty[uuid]
+                res['difficulty'] = difficulty
                 correct_format, think_str = self.check_format(self.model_path, response_ids)
                 if (correct_format):
                     summary_inputs.append(think_str)
-                    correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str})
+                    correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str, 'difficulty': difficulty, 'uuid': uuid})
 
 
             summary_inputs = []
@@ -566,6 +566,8 @@ class vLLMRollout(BaseRollout):
             if len(summary_inputs) == 0:
                 final_response = [res["response_ids"] for res in response]
                 response_is_summarized = [False] * len(final_response)
+                uuid_list = [res['uuid'] for res in response]
+                difficulty_list = [res['difficulty'] for res in response]
             else:
                 summary_outputs = self.summarize_think(summary_inputs)
                 for i, summary_output in enumerate(summary_outputs):
@@ -578,9 +580,10 @@ class vLLMRollout(BaseRollout):
                     response_ids = res["response_ids"]
                     think_str = res["think_str"]
                     summary_output = res["summary_output"]
+                    difficulty = res["difficulty"]
                     vllm_input = self.create_vllm_summary_inputs(prompt_ids, summary_output)
 
-                    vllm_inputs_summarized.append({'prompt_ids': prompt_ids, 'response_ids': vllm_input, 'summarized_prompt_ids': vllm_input})
+                    vllm_inputs_summarized.append({'prompt_ids': prompt_ids, 'response_ids': vllm_input, 'summarized_prompt_ids': vllm_input, 'difficulty': difficulty})
                 
                 # breakpoint()
                 max_tokens = self.config.response_length - max([len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized])
@@ -678,8 +681,6 @@ class vLLMRollout(BaseRollout):
             is_summarized_list=response_is_summarized,
         )
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
-        non_tensor_batch['difficulty'] = np.array(difficulty_list)
-
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
             {
@@ -688,6 +689,7 @@ class vLLMRollout(BaseRollout):
                 "input_ids": seq,  # here input_ids become the whole sentences
                 "attention_mask": attention_mask,
                 "position_ids": position_ids,
+                "difficulty": torch.tensor(difficulty_list).unsqueeze(1),
             },
             batch_size=batch_size,
         )
