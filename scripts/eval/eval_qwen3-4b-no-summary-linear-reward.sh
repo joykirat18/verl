@@ -10,7 +10,7 @@ export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 EXPERIMENT_NAME=qwen4b_lora_dapo_math_10k_context_linear_reward_no_summary
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
-SAVE_PATH=verlCheckpoint/NonSummary/$EXPERIMENT_NAME
+SAVE_PATH=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/train/verlCheckpoint/NonSummary/$EXPERIMENT_NAME
 if [ "$WANDB_API_KEY" != "None" ]; then
     export WANDB_DIR=${SAVE_PATH}
     mkdir -p $WANDB_DIR
@@ -28,7 +28,7 @@ fi
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/dapo-17k/train.parquet \
-    data.val_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/combined_test_dataset/test.parquet \
+    data.val_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/full_test_dataset/test.parquet \
     data.train_batch_size=16 \
     data.max_prompt_length=1024 \
     data.max_response_length=10000 \
@@ -75,4 +75,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.save_freq=10 \
     trainer.test_freq=10 \
     trainer.val_before_train=True \
-    trainer.total_epochs=2 $@
+    trainer.total_epochs=0 $@

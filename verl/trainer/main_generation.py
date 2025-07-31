@@ -112,6 +112,10 @@ def main_task(config):
         batch_dict = {"input_ids": input_ids, "attention_mask": attention_mask, "position_ids": position_ids}
 
         data = DataProto.from_dict(batch_dict)
+        data.meta_info['validate'] = True
+        data.meta_info['main_generation'] = True
+        data.meta_info['is_lora'] = config.data.is_lora
+        data.meta_info['model_lora_path'] = config.data.model_lora_path
         data_padded, pad_size = pad_dataproto_to_divisor(data, wg.world_size)
 
         # START TO GENERATE FOR n_samples TIMES

@@ -25,8 +25,8 @@ import numpy as np
 import os
 import math
 
-@register("sum")
-class SumRewardManager:
+@register("sumLinear")
+class SumLinearRewardManager:
     """The reward manager."""
 
     def __init__(self, tokenizer, num_examine, compute_score=None, save_path=None, rewardType=None, reward_fn_key="data_source") -> None:
@@ -48,52 +48,6 @@ class SumRewardManager:
         self.reward_fn_key = reward_fn_key  # Store the key for accessing the data source
         self.model_name = self.tokenizer.name_or_path
 
-    def compute_standardized_deviation(self, length, mean_length, std_length, epsilon=1e-6):
-        return abs(length - mean_length) / (std_length + epsilon)
-
-    def accuracy_reward_distribution(self, length, mean_length, std_length, alpha=0.1, epsilon=1e-6, difficulty_scale=1.0):
-        """
-        Compute accuracy reward with comprehensive debugging.
-        """
-        
-        # Handle invalid inputs
-        if np.isnan(length) or np.isnan(mean_length) or np.isnan(std_length):
-            return 1.0
-        
-        # If std is very small or zero, return maximum reward
-        if std_length < epsilon:
-            return 1.0
-        
-        # Compute standardized deviation
-        z = abs(length - mean_length) / (std_length + epsilon)
-        
-        # Compute reward
-        reward = np.exp(-1 * z)
-        
-        
-        return difficulty_scale * reward
-    
-    def accuracy_reward(self, length, previous_length_list, difficulty_scale=None, alpha=0.1, epsilon=1e-6, return_L_norm=False):
-
-        try:
-            L_min = np.min(previous_length_list)
-            L_max = np.max(previous_length_list)
-            median = np.median(previous_length_list)
-        except Exception as e:
-            print(f"Error: previous_length_list is empty: {e}")
-            return 0
-
-        L_norm = (L_max - length) / (L_max - L_min + epsilon)
-
-        if (length < median):
-            L_norm = 1.0
-
-        reward = difficulty_scale * L_norm
-
-        if return_L_norm:
-            return reward, L_norm
-        else:
-            return reward
     
     def length_reward(
         self,
@@ -361,12 +315,6 @@ class SumRewardManager:
                 for length_list in previous_length_list:
                     if len(length_list) > 0:
                         previous_length_list_flattened.extend(length_list)
-
-                # mean_length = np.mean(previous_length_list_flattened)
-                # std_length = np.std(previous_length_list_flattened)
-                # median_length = np.median(previous_length_list_flattened)
-                # L_min = np.min(previous_length_list_flattened)
-                # L_max = np.max(previous_length_list_flattened)
 
                 correctness_reward = scores['score']['score']
                 format_reward = scores['score']['soft_format'] + scores['score']['hard_format']

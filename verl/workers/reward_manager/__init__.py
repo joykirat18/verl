@@ -18,7 +18,8 @@ from .dapo import DAPORewardManager
 from .naive import NaiveRewardManager
 from .prime import PrimeRewardManager
 from .summarization import SummarizationRewardManager
-from .sum import SumRewardManager
+from .sumLinear import SumLinearRewardManager
+from .sumDistribution import SumDistributionRewardManager
 
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     "register",
     "get_reward_manager_cls",
     "SummarizationRewardManager",
-    "SumRewardManager"
+    "SumLinearRewardManager",
+    "SumDistributionRewardManager"
 ]
