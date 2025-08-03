@@ -20,6 +20,8 @@ def getCorrectness(model_name: str, model_output: str, ground_truth: str) -> boo
     if model_name == "Qwen/Qwen3-4B" or model_name == "Qwen/Qwen3-8B":
         if '</think>' in model_output:
             model_output = model_output.split('</think>')[-1]
+        else:
+            return 0.0
     else:
         raise ValueError(f"Model name {model_name} not supported")
 
@@ -66,7 +68,7 @@ def get_hard_format_score(model_name: str, model_output:str) -> float:
 
 def compute_score(model_output: str, ground_truth: str, model_name: str, timeout_score: float = 0) -> bool:
 
-    correctness = getCorrectness(model_name, model_output, ground_truth) * 2
+    correctness = getCorrectness(model_name, model_output, ground_truth) * 4
 
     soft_format_score = get_soft_format_score(model_name, model_output)
     hard_format_score = get_hard_format_score(model_name, model_output)

@@ -25,8 +25,8 @@ import numpy as np
 import os
 import math
 
-@register("sumLinear")
-class SumLinearRewardManager:
+@register("rewardHackDistribution")
+class RewardHackDistributionRewardManager:
     """The reward manager."""
 
     def __init__(self, tokenizer, num_examine, compute_score=None, save_path=None, rewardType=None, reward_fn_key="data_source") -> None:
@@ -48,35 +48,30 @@ class SumLinearRewardManager:
         self.reward_fn_key = reward_fn_key  # Store the key for accessing the data source
         self.model_name = self.tokenizer.name_or_path
 
-    
-    def length_reward(
-        self,
-        length: int,
-        previous_length_list: list,
-        difficulty_scale: float | None = None,
-        epsilon: float = 1e-6,
-        return_L_norm: bool = False,
-        difficulty=None,
-):
-        try:
-            L_min = np.min(previous_length_list)
-            L_max = np.max(previous_length_list)
-            median = np.median(previous_length_list)
-        except Exception as e:
-            print(f"Error: previous_length_list is empty: {e}, {difficulty}")
-            return 0
+    def compute_standardized_deviation(self, length, mean_length, std_length, epsilon=1e-6):
+        return abs(length - mean_length) / (std_length + epsilon)
 
-        span = max(L_max - L_min, epsilon)
-        L_norm = (L_max - length) / span
-        L_norm = max(0.0, min(1.0, L_norm))          # clamp
-
-        # smooth bonus for being shorter than median (sigmoid, not cliff)
-        soft_bonus = 1 / (1 + math.exp((length - median) / (0.1 * median)))
-        L_norm = max(L_norm, soft_bonus)
-
-        reward = difficulty_scale * L_norm
-
-        return (reward, L_norm) if return_L_norm else reward
+    def accuracy_reward_distribution(self, length, mean_length, std_length, alpha=0.1, epsilon=1e-6, difficulty_scale=1.0):
+        """
+        Compute accuracy reward with comprehensive debugging.
+        """
+        
+        # Handle invalid inputs
+        if np.isnan(length) or np.isnan(mean_length) or np.isnan(std_length):
+            return 1.0
+        
+        # If std is very small or zero, return maximum reward
+        if std_length < epsilon:
+            return 1.0
+        
+        # Compute standardized deviation
+        z = abs(length - mean_length) / (std_length + epsilon)
+        
+        # Compute reward
+        reward = np.exp(-1 * z)
+        
+        
+        return difficulty_scale * reward
 
         
     def get_difficulty_class(self, difficulty):
@@ -96,9 +91,9 @@ class SumLinearRewardManager:
         if difficulty_category == 'easy':
             difficulty_scale = 1.0
         elif difficulty_category == 'medium':
-            difficulty_scale = 0.75
-        elif difficulty_category == 'hard':
             difficulty_scale = 0.5
+        elif difficulty_category == 'hard':
+            difficulty_scale = 0.25
         else:
             difficulty_scale = 0
         return difficulty_scale
@@ -316,12 +311,18 @@ class SumLinearRewardManager:
                     if len(length_list) > 0:
                         previous_length_list_flattened.extend(length_list)
 
+                mean_length = np.mean(previous_length_list_flattened)
+                std_length = np.std(previous_length_list_flattened)
+                # median_length = np.median(previous_length_list_flattened)
+                # L_min = np.min(previous_length_list_flattened)
+                # L_max = np.max(previous_length_list_flattened)
+
                 correctness_reward = scores['score']['score']
                 format_reward = scores['score']['soft_format'] + scores['score']['hard_format']
-                length_reward = self.length_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale, difficulty=difficulty)
+                length_reward = self.accuracy_reward_distribution(length, mean_length, std_length, difficulty_scale=difficulty_scale) * 20
 
-                if correctness_reward == 0:
-                    length_reward = 0
+                # if correctness_reward == 0:
+                    # length_reward = 0
                 
                 reward = correctness_reward + format_reward + length_reward
                 reason = f"score: {scores['score']}"

@@ -25,8 +25,8 @@ import numpy as np
 import os
 import math
 
-@register("sumLinear")
-class SumLinearRewardManager:
+@register("rewardHackLinear")
+class RewardHackLinearRewardManager:
     """The reward manager."""
 
     def __init__(self, tokenizer, num_examine, compute_score=None, save_path=None, rewardType=None, reward_fn_key="data_source") -> None:
@@ -318,10 +318,10 @@ class SumLinearRewardManager:
 
                 correctness_reward = scores['score']['score']
                 format_reward = scores['score']['soft_format'] + scores['score']['hard_format']
-                length_reward = self.length_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale, difficulty=difficulty)
+                length_reward = self.length_reward(length, previous_length_list_flattened, difficulty_scale=difficulty_scale, difficulty=difficulty) * 20
 
-                if correctness_reward == 0:
-                    length_reward = 0
+                # if correctness_reward == 0:
+                    # length_reward = 0
                 
                 reward = correctness_reward + format_reward + length_reward
                 reason = f"score: {scores['score']}"

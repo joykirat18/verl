@@ -91,9 +91,9 @@ class SumDistributionRewardManager:
         if difficulty_category == 'easy':
             difficulty_scale = 1.0
         elif difficulty_category == 'medium':
-            difficulty_scale = 0.5
+            difficulty_scale = 0.75
         elif difficulty_category == 'hard':
-            difficulty_scale = 0.25
+            difficulty_scale = 0.5
         else:
             difficulty_scale = 0
         return difficulty_scale

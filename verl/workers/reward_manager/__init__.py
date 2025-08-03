@@ -20,6 +20,8 @@ from .prime import PrimeRewardManager
 from .summarization import SummarizationRewardManager
 from .sumLinear import SumLinearRewardManager
 from .sumDistribution import SumDistributionRewardManager
+from .rewardHackDistribution import RewardHackDistributionRewardManager
+from .rewardHackLinear import RewardHackLinearRewardManager
 
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
@@ -31,5 +33,7 @@ __all__ = [
     "get_reward_manager_cls",
     "SummarizationRewardManager",
     "SumLinearRewardManager",
-    "SumDistributionRewardManager"
+    "SumDistributionRewardManager",
+    "RewardHackDistributionRewardManager",
+    "RewardHackLinearRewardManager"
 ]

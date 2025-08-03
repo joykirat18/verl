@@ -5,7 +5,7 @@ set -x
 
 export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
-export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
+export RAY_TMPDIR="/nas-hdd/joykirat/tmp_ray"
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 EXPERIMENT_NAME=qwen4b_lora_dapo_math_10k_context_linear_reward_no_summary

@@ -57,6 +57,8 @@ from verl.workers.rollout.base import BaseRollout
 from verl.utils.reward_score import default_compute_score
 import random
 import requests
+from uuid import UUID
+
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__file__)
@@ -166,6 +168,8 @@ class vLLMRollout(BaseRollout):
         engine_kwargs = {key: val for key, val in engine_kwargs.items() if val is not None}
         if config.get("limit_images", None):  # support for multi-image data
             engine_kwargs["limit_mm_per_prompt"] = {"image": config.get("limit_images")}
+
+        self.summarize_rollouts = config.get('summarize_rollouts', False)
 
         self.inference_engine = LLM(
             model=model_path,
@@ -557,11 +561,11 @@ class vLLMRollout(BaseRollout):
                 res['difficulty'] = difficulty
                 correct_format, think_str = self.check_format(self.model_path, response_ids)
                 if (correct_format):
-                    summary_inputs.append(think_str)
+                    summary_inputs.append({'think_str': think_str, 'difficulty_category': self.get_difficulty_class(difficulty)})
                     correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str, 'difficulty': difficulty, 'uuid': uuid})
 
-
-            summary_inputs = []
+            if self.summarize_rollouts == False:
+                summary_inputs = []
             print(f"Summarizing {len(summary_inputs)} responses")
             if len(summary_inputs) == 0:
                 final_response = [res["response_ids"] for res in response]
@@ -569,6 +573,7 @@ class vLLMRollout(BaseRollout):
                 uuid_list = [res['uuid'] for res in response]
                 difficulty_list = [res['difficulty'] for res in response]
             else:
+                original_uuid_list = [res['uuid'] for res in response]
                 summary_outputs = self.summarize_think(summary_inputs)
                 for i, summary_output in enumerate(summary_outputs):
                     correct_format_response[i]["summary_output"] = summary_output
@@ -581,9 +586,10 @@ class vLLMRollout(BaseRollout):
                     think_str = res["think_str"]
                     summary_output = res["summary_output"]
                     difficulty = res["difficulty"]
+                    uuid = res['uuid']
                     vllm_input = self.create_vllm_summary_inputs(prompt_ids, summary_output)
 
-                    vllm_inputs_summarized.append({'prompt_ids': prompt_ids, 'response_ids': vllm_input, 'summarized_prompt_ids': vllm_input, 'difficulty': difficulty})
+                    vllm_inputs_summarized.append({'prompt_ids': prompt_ids, 'response_ids': vllm_input, 'summarized_prompt_ids': vllm_input, 'difficulty': difficulty, 'uuid': uuid})
                 
                 # breakpoint()
                 max_tokens = self.config.response_length - max([len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized])
@@ -610,42 +616,62 @@ class vLLMRollout(BaseRollout):
                         prompt_ids = res.prompt_token_ids
                         assert prompt_ids == vllm_inputs_summarized[i]["summarized_prompt_ids"]
                         vllm_inputs_summarized[i]["summarized_response_ids"] = response_ids
+                        vllm_inputs_summarized[i]["summarized"] = True
                     
                     # breakpoint()
 
-                    # group original response and vllm_input_summarized by prompt_ids
-                    grouped_response = response
-                    for i, res in enumerate(vllm_inputs_summarized):
-                        # new summarized response should have the think part included
-                        new_response_ids = self.create_summarized_response(res["prompt_ids"], res["summarized_prompt_ids"], res["summarized_response_ids"])
-                        grouped_response.append({"prompt_ids": res["prompt_ids"], "response_ids": new_response_ids, "summarized": True})
-                    
-                    # breakpoint()
-                    # group the dict by prompt_ids
-                    grouped_response_list = []
-                    seen = {}
-                    for res in grouped_response:
-                        key = tuple(res["prompt_ids"])
-                        if key not in seen:
-                            seen[key] = len(grouped_response_list)
-                            grouped_response_list.append([res])
-                        else:
-                            grouped_response_list[seen[key]].append(res)
+                    unique_uuid_list = self.unique_uuids_preserve_order(original_uuid_list)
 
-                    # breakpoint()
-                    
-                    # shuffle the grouped_response_dict
                     final_response = []
                     response_is_summarized = []
-                    for group in grouped_response_list:
-                        original_responses = [res for res in group if not res["summarized"]]
-                        summarized_responses = [res for res in group if res["summarized"]]
+                    difficulty_list = []
+                    uuid_list = []
+
+                    for uuid in unique_uuid_list:
+                        original_responses = [res for res in response if res['uuid'] == uuid and not res['summarized']]
+                        summarized_responses = [res for res in vllm_inputs_summarized if res['uuid'] == uuid and res['summarized']]
                         all_responses = original_responses + summarized_responses
                         random.shuffle(all_responses)
                         selected_responses = all_responses[:rollout_n]
                         for res in selected_responses:
                             final_response.append(res["response_ids"])
                             response_is_summarized.append(res["summarized"])
+                            difficulty_list.append(res["difficulty"])
+                            uuid_list.append(res["uuid"])
+
+                    # # group original response and vllm_input_summarized by prompt_ids
+                    # grouped_response = response
+                    # for i, res in enumerate(vllm_inputs_summarized):
+                    #     # new summarized response should have the think part included
+                    #     new_response_ids = self.create_summarized_response(res["prompt_ids"], res["summarized_prompt_ids"], res["summarized_response_ids"])
+                    #     grouped_response.append({"prompt_ids": res["prompt_ids"], "response_ids": new_response_ids, "summarized": True, 'difficulty': res['difficulty'], 'uuid': res['uuid']})
+                    
+                    # # breakpoint()
+                    # # group the dict by uuid
+                    # grouped_response_list = []
+                    # seen = {}
+                    # for res in grouped_response:
+                    #     key = tuple(res["uuid"])
+                    #     if key not in seen:
+                    #         seen[key] = len(grouped_response_list)
+                    #         grouped_response_list.append([res])
+                    #     else:
+                    #         grouped_response_list[seen[key]].append(res)
+
+                    # # breakpoint()
+                    
+                    # # shuffle the grouped_response_dict
+                    # final_response = []
+                    # response_is_summarized = []
+                    # for group in grouped_response_list:
+                    #     original_responses = [res for res in group if not res["summarized"]]
+                    #     summarized_responses = [res for res in group if res["summarized"]]
+                    #     all_responses = original_responses + summarized_responses
+                    #     random.shuffle(all_responses)
+                    #     selected_responses = all_responses[:rollout_n]
+                    #     for res in selected_responses:
+                    #         final_response.append(res["response_ids"])
+                    #         response_is_summarized.append(res["summarized"])
                 
 
             final_response = pad_2d_list_to_length(final_response, self.pad_token_id, max_length=self.config.response_length).to(
@@ -699,6 +725,19 @@ class vLLMRollout(BaseRollout):
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
     
+    def get_difficulty_class(self, difficulty):
+        if difficulty == None:
+            return "unknown"
+        if difficulty >= 0.8:
+            difficulty_category = 'easy'
+        elif difficulty >= 0.3:
+            difficulty_category = 'medium'
+        elif difficulty >= 0:
+            difficulty_category = 'hard'
+        else:
+            difficulty_category = 'unknown'
+        return difficulty_category
+    
     # Modified attention mask calculation
     def get_custom_response_mask(self, response_id, eos_token, dtype, is_summarized_list):
         """
@@ -738,6 +777,16 @@ class vLLMRollout(BaseRollout):
         return final_mask
 
 
+    def unique_uuids_preserve_order(self, uuid_list):
+        seen = set()
+        unique_list = []
+        for u in uuid_list:
+            # If input is string, convert to UUID object for consistency
+            uuid_obj = UUID(str(u))
+            if uuid_obj not in seen:
+                seen.add(uuid_obj)
+                unique_list.append(str(uuid_obj))  # or append uuid_obj if you want UUID objects
+        return unique_list
     def check_format(self, model_path: str, response_ids: list[int]) -> bool:
         response_str = self.tokenizer.decode(response_ids)
         if model_path == "Qwen/Qwen3-4B" or model_path == "Qwen/Qwen3-8B":
@@ -751,19 +800,54 @@ class vLLMRollout(BaseRollout):
         else:
             raise ValueError(f"Model path {model_path} not supported")
     
-    def get_summary_prompt(self, think_str: str) -> str:
-        summarizationPrompt = (
-            "You are a helpful and concise reasoning summarization assistant. Your task is to summarize a long chain of reasoning into a concise summary, while preserving the logical flow and key insights.\n\n"
-            "Guidelines:\n"
-            "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
-            "Be concise—rephrase and compress wherever possible without losing critical content.\n"
-            "Avoid omitting essential details that change the meaning or validity of the reasoning.\n"
-        )
+    def get_summary_prompt(self, think_input) -> str:
+        think_str = think_input['think_str']
+        difficulty_category = think_input['difficulty_category']
+        
+        print(f"Difficulty category: {difficulty_category}")
+        if difficulty_category == 'easy':
+            summarizationPrompt = (
+                "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
+                "Guidelines:\n"
+                "Retain the reasoning structure—capture important intermediate steps and conclusions, while omitting unnecessary details.\n"
+                "Omit detailed steps and explanations unless they are essential for understanding the main idea.\n"
+                "Keep the summary short and simple.\n"
+                "The summary should be brief.\n"
+            )
+        elif difficulty_category == 'medium':
+            summarizationPrompt = (
+                "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
+                "Guidelines:\n"
+                "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
+                "Compress the explanation by rephrasing and omitting minor details, but do not lose important content.\n"
+                "Make sure the summary remains clear and faithful to the original logic.\n"
+                "The summary should be moderately detailed.\n"
+            )
+        elif difficulty_category == 'hard':
+            summarizationPrompt = (
+                "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
+                "Guidelines:\n"
+                "Carefully retain the full structure of the reasoning, including important intermediate steps, assumptions, and conclusions.\n"
+                "Highlight subtle distinctions, exceptions, or caveats that are crucial to the argument’s validity.\n"
+                "Summarize with maximum precision—avoid oversimplification or omission of any detail that could alter the original meaning.\n"
+                "The summary should be detailed and comprehensive.\n"
+            )
+        elif difficulty_category == 'unknown':        
+            summarizationPrompt = (
+                "You are a helpful and concise reasoning summarization assistant. Your task is to summarize a long chain of reasoning into a concise summary, while preserving the logical flow and key insights.\n\n"
+                "Guidelines:\n"
+                "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
+                "Be concise—rephrase and compress wherever possible without losing critical content.\n"
+                "Avoid omitting essential details that change the meaning or validity of the reasoning.\n"
+            )
+        else:
+            raise ValueError(f"Difficulty category {difficulty_category} not supported")
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
             message = [
                 {"role": "system", "content": summarizationPrompt},
                 {"role": "user", "content": think_str}
             ]
+            # breakpoint()
             prompt = self.tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=True, enable_thinking=False)
             tokenized_prompt = self.tokenizer.apply_chat_template(message, tokenize=True, add_generation_prompt=True, enable_thinking=False)
             return prompt, tokenized_prompt
@@ -781,7 +865,7 @@ class vLLMRollout(BaseRollout):
             
             if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
                 max_tokens = 40960 - max([len(tokenized_prompt) for tokenized_prompt in tokenized_prompts])
-                max_tokens = min(25000, max_tokens)
+                max_tokens = min(10000, max_tokens)
             else:
                 raise ValueError(f"Model path {self.model_path} not supported")
             print(f"Max tokens: {max_tokens} for summarization")

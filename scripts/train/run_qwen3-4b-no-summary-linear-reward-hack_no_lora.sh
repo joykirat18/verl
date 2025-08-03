@@ -7,10 +7,10 @@ export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
 export RAY_TMPDIR="/nas-hdd/joykirat/tmp_ray"
 
-export CUDA_VISIBLE_DEVICES=0,1
-EXPERIMENT_NAME=qwen4b_dapo_math_10k_context_distributed_reward_no_summary
+export CUDA_VISIBLE_DEVICES=6,7
+EXPERIMENT_NAME=qwen4b_dapo_math_10k_context_linear_hack_reward_no_summary
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
-SAVE_PATH=verlCheckpoint/NonSummary/$EXPERIMENT_NAME
+SAVE_PATH=/nas-hdd/joykirat/verlCheckpoint/NonSummary/$EXPERIMENT_NAME
 if [ "$WANDB_API_KEY" != "None" ]; then
     export WANDB_DIR=${SAVE_PATH}
     mkdir -p $WANDB_DIR
@@ -55,12 +55,13 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.summarize_rollouts=False \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
-    reward_model.reward_manager=SumDistribution \
+    reward_model.reward_manager=rewardHackLinear \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
     trainer.project_name='verl_grpo_example_gsm8k' \
@@ -69,7 +70,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.default_local_dir=${SAVE_PATH} \
     trainer.rollout_save_path=${ROLLOUT_SAVE_PATH} \
-    trainer.save_freq=10 \
+    trainer.save_freq=50 \
     trainer.test_freq=10 \
     trainer.val_before_train=False \
     trainer.total_epochs=2 $@

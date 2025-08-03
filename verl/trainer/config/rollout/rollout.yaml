@@ -4,6 +4,9 @@ name: vllm
 # sync: LLM, async: AsyncLLM
 mode: sync
 
+# summarize the rollouts
+summarize_rollouts: False
+
 # Sampling temperature for rollout.
 temperature: 1.0
 

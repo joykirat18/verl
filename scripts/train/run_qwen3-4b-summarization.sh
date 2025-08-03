@@ -5,7 +5,7 @@ set -x
 
 export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
-export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
+export RAY_TMPDIR="/nas-hdd/joykirat/tmp_ray"
 
 export CUDA_VISIBLE_DEVICES=2,3,5,6
 PROMPT_KEY=prompt
