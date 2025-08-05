@@ -8,9 +8,9 @@ export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
 export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 
 export CUDA_VISIBLE_DEVICES=5,6
-EXPERIMENT_NAME=qwen4b_lora_dapo_math_10k_context_distributed_reward_no_summary
+EXPERIMENT_NAME=qwen4b_dapo_math_10k_context_distributed_reward_no_summary
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
-SAVE_PATH=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/train/verlCheckpoint/NonSummary/$EXPERIMENT_NAME
+SAVE_PATH=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/train/verlCheckpoint/NonSummary/qwen4b_dapo_math_10k_context_distributed_reward_no_summary
 if [ "$WANDB_API_KEY" != "None" ]; then
     export WANDB_DIR=${SAVE_PATH}
     mkdir -p $WANDB_DIR
@@ -33,9 +33,6 @@ python3 -m verl.trainer.main_ppo \
     data.max_prompt_length=1024 \
     data.max_response_length=10000 \
     data.shuffle=False \
-    actor_rollout_ref.model.lora_rank=32 \
-    actor_rollout_ref.model.lora_alpha=64 \
-    actor_rollout_ref.model.target_modules=all-linear \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     actor_rollout_ref.model.path=Qwen/Qwen3-4B \

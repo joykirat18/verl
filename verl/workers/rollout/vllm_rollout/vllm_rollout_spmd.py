@@ -55,6 +55,7 @@ from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
 from verl.utils.reward_score import default_compute_score
+from verl.utils.reward_score.math_verify_sum import getRawCorrectness
 import random
 import requests
 from uuid import UUID
@@ -559,10 +560,12 @@ class vLLMRollout(BaseRollout):
                 uuid = res["uuid"]
                 difficulty = uuid_difficulty[uuid]
                 res['difficulty'] = difficulty
+                data_source = res['data_source']
+                reward_model = res['reward_model']
                 correct_format, think_str = self.check_format(self.model_path, response_ids)
                 if (correct_format):
                     summary_inputs.append({'think_str': think_str, 'difficulty_category': self.get_difficulty_class(difficulty)})
-                    correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str, 'difficulty': difficulty, 'uuid': uuid})
+                    correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str, 'difficulty': difficulty, 'uuid': uuid, 'data_source': data_source, 'reward_model': reward_model})
 
             if self.summarize_rollouts == False:
                 summary_inputs = []
@@ -587,19 +590,18 @@ class vLLMRollout(BaseRollout):
                     summary_output = res["summary_output"]
                     difficulty = res["difficulty"]
                     uuid = res['uuid']
-                    vllm_input = self.create_vllm_summary_inputs(prompt_ids, summary_output)
+                    vllm_input, response_ids_with_summarized_thinking = self.create_vllm_summary_inputs(prompt_ids, summary_output, res)
 
-                    vllm_inputs_summarized.append({'prompt_ids': prompt_ids, 'response_ids': vllm_input, 'summarized_prompt_ids': vllm_input, 'difficulty': difficulty, 'uuid': uuid})
+                    vllm_inputs_summarized.append({'original_prompt_ids': prompt_ids, 'original_response_ids': response_ids, 'response_ids_with_summarized_thinking': response_ids_with_summarized_thinking, 'summarized_prompt_ids': vllm_input, 'difficulty': difficulty, 'uuid': uuid})
                 
-                # breakpoint()
                 max_tokens = self.config.response_length - max([len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized])
                 print(f"Summarized response length: {[len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized]}")
                 print(f"Max tokens: {max_tokens} response length: {self.config.response_length}")
                 with self.update_sampling_params(
                     n=1,
-                    temperature=0.6,
-                    top_p=0.95,
-                    top_k=20,
+                    temperature=1.0,
+                    top_p=1.0,
+                    top_k=-1,
                     max_tokens=max_tokens
                 ):
                     summarized_outputs = self.inference_engine.generate(
@@ -618,7 +620,6 @@ class vLLMRollout(BaseRollout):
                         vllm_inputs_summarized[i]["summarized_response_ids"] = response_ids
                         vllm_inputs_summarized[i]["summarized"] = True
                     
-                    # breakpoint()
 
                     unique_uuid_list = self.unique_uuids_preserve_order(original_uuid_list)
 
@@ -634,45 +635,14 @@ class vLLMRollout(BaseRollout):
                         random.shuffle(all_responses)
                         selected_responses = all_responses[:rollout_n]
                         for res in selected_responses:
-                            final_response.append(res["response_ids"])
+                            if res['summarized']:
+                                final_response.append(self.get_complete_summary_rollouts(res))
+                            else:
+                                final_response.append(res["response_ids"])
                             response_is_summarized.append(res["summarized"])
                             difficulty_list.append(res["difficulty"])
                             uuid_list.append(res["uuid"])
 
-                    # # group original response and vllm_input_summarized by prompt_ids
-                    # grouped_response = response
-                    # for i, res in enumerate(vllm_inputs_summarized):
-                    #     # new summarized response should have the think part included
-                    #     new_response_ids = self.create_summarized_response(res["prompt_ids"], res["summarized_prompt_ids"], res["summarized_response_ids"])
-                    #     grouped_response.append({"prompt_ids": res["prompt_ids"], "response_ids": new_response_ids, "summarized": True, 'difficulty': res['difficulty'], 'uuid': res['uuid']})
-                    
-                    # # breakpoint()
-                    # # group the dict by uuid
-                    # grouped_response_list = []
-                    # seen = {}
-                    # for res in grouped_response:
-                    #     key = tuple(res["uuid"])
-                    #     if key not in seen:
-                    #         seen[key] = len(grouped_response_list)
-                    #         grouped_response_list.append([res])
-                    #     else:
-                    #         grouped_response_list[seen[key]].append(res)
-
-                    # # breakpoint()
-                    
-                    # # shuffle the grouped_response_dict
-                    # final_response = []
-                    # response_is_summarized = []
-                    # for group in grouped_response_list:
-                    #     original_responses = [res for res in group if not res["summarized"]]
-                    #     summarized_responses = [res for res in group if res["summarized"]]
-                    #     all_responses = original_responses + summarized_responses
-                    #     random.shuffle(all_responses)
-                    #     selected_responses = all_responses[:rollout_n]
-                    #     for res in selected_responses:
-                    #         final_response.append(res["response_ids"])
-                    #         response_is_summarized.append(res["summarized"])
-                
 
             final_response = pad_2d_list_to_length(final_response, self.pad_token_id, max_length=self.config.response_length).to(
                 idx.device
@@ -724,6 +694,13 @@ class vLLMRollout(BaseRollout):
             batch["rollout_log_probs"] = rollout_log_probs
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+    
+    def get_complete_summary_rollouts(self, summarized_response):
+        response_ids_with_summarized_thinking = summarized_response['response_ids_with_summarized_thinking']
+        summarized_response_ids = summarized_response['summarized_response_ids']
+        
+        return response_ids_with_summarized_thinking + summarized_response_ids
+
     
     def get_difficulty_class(self, difficulty):
         if difficulty == None:
@@ -909,15 +886,36 @@ class vLLMRollout(BaseRollout):
 
         return response.json()["choices"]
     
-    def create_vllm_summary_inputs(self, prompt_ids: List[int], summarized_think: str) -> List[str]:
+    def create_vllm_summary_inputs(self, prompt_ids: List[int], summarized_think: str, res: dict) -> List[str]:
         prompt_str = self.tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
-        new_prompt = prompt_str + "<think>" + summarized_think + "</think>"
+        clean_summarized_think = self.clean_summarize_think(summarized_think, res)
+
+        new_prompt = prompt_str + "<think>" + clean_summarized_think + "</think>"
 
         new_prompt_ids = self.tokenizer.encode(new_prompt, add_special_tokens=True)
 
-        return new_prompt_ids
+        return new_prompt_ids, self.tokenizer.encode("<think>" + clean_summarized_think + "</think>", add_special_tokens=True)
     
+    def clean_summarize_think(self, summarized_think: str, res: dict) -> str:
+
+        reward_model = res['reward_model']
+
+
+        score = getRawCorrectness(summarized_think, reward_model['ground_truth'])
+
+        while score >= 1:
+            summarized_think = summarized_think.split('\n\n')
+            summarized_think = summarized_think[:-1]
+            summarized_think = '\n\n'.join(summarized_think)
+            score = getRawCorrectness(summarized_think, reward_model['ground_truth'])
+
+        return summarized_think
+
+
+        
+
+        
     def create_summarized_response(self, prompt_ids: List[int], summarized_prompt_ids: List[int], summarized_response_ids: List[int]) -> List[int]:
         # remove the overlap part of prompt_ids and summarized_prompt_ids
         # then append the remaining part to the summarized_response_ids

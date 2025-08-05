@@ -53,6 +53,7 @@ if __name__ == "__main__":
             prompt = example.pop("prompt")
             reward_model = example.pop("reward_model")
 
+            prompt[0]['content'] = prompt[0]['content'].replace('Solve the following math problem step by step. The last line of your response should be of the form Answer: $Answer (without quotes) where $Answer is the answer to the problem.\n\n', '')
             prompt[0]['content'] = prompt[0]['content'].replace('\n\nRemember to put your answer on its own line after \"Answer:\".', instruction_following)
 
             data = {

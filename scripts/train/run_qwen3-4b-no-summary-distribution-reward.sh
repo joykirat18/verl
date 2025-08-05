@@ -69,7 +69,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.default_local_dir=${SAVE_PATH} \
     trainer.rollout_save_path=${ROLLOUT_SAVE_PATH} \
-    trainer.save_freq=10 \
-    trainer.test_freq=10 \
-    trainer.val_before_train=False \
+    trainer.save_freq=20 \
+    trainer.test_freq=20 \
+    trainer.val_before_train=True \
     trainer.total_epochs=2 $@

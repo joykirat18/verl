@@ -22,6 +22,7 @@ from .sumLinear import SumLinearRewardManager
 from .sumDistribution import SumDistributionRewardManager
 from .rewardHackDistribution import RewardHackDistributionRewardManager
 from .rewardHackLinear import RewardHackLinearRewardManager
+from .correctnessOnly import CorrectnessOnlyRewardManager
 
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
@@ -35,5 +36,6 @@ __all__ = [
     "SumLinearRewardManager",
     "SumDistributionRewardManager",
     "RewardHackDistributionRewardManager",
-    "RewardHackLinearRewardManager"
+    "RewardHackLinearRewardManager",
+    "CorrectnessOnlyRewardManager"
 ]
