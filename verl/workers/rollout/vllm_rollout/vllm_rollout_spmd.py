@@ -595,6 +595,7 @@ class vLLMRollout(BaseRollout):
                     vllm_inputs_summarized.append({'original_prompt_ids': prompt_ids, 'original_response_ids': response_ids, 'response_ids_with_summarized_thinking': response_ids_with_summarized_thinking, 'summarized_prompt_ids': vllm_input, 'difficulty': difficulty, 'uuid': uuid})
                 
                 max_tokens = self.config.response_length - max([len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized])
+                max_tokens = max(1, max_tokens)
                 print(f"Summarized response length: {[len(vllm_input['summarized_prompt_ids']) for vllm_input in vllm_inputs_summarized]}")
                 print(f"Max tokens: {max_tokens} response length: {self.config.response_length}")
                 with self.update_sampling_params(
@@ -782,41 +783,49 @@ class vLLMRollout(BaseRollout):
         difficulty_category = think_input['difficulty_category']
         
         print(f"Difficulty category: {difficulty_category}")
+        
+        summarizationPrompt = "You will get a reasoning chain that may have unnecessary details, repeated steps, or occasional backtracking. Your task is to shorten and clean it up by removing parts that do not support the main logic or conclusion. Keep only backtracking or repeated steps if they help clarify or double-check important points. Do not add new ideas or change the meaning. Try to keep the overall structure and logical flow, but provide enough explanation to make the reasoning clear and complete. Aim for a balance between brevity and clarity."
+
         if difficulty_category == 'easy':
-            summarizationPrompt = (
-                "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
-                "Guidelines:\n"
-                "Retain the reasoning structure—capture important intermediate steps and conclusions, while omitting unnecessary details.\n"
-                "Omit detailed steps and explanations unless they are essential for understanding the main idea.\n"
-                "Keep the summary short and simple.\n"
-                "The summary should be brief.\n"
-            )
+            # summarizationPrompt = (
+            #     "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
+            #     "Guidelines:\n"
+            #     "Retain the reasoning structure—capture important intermediate steps and conclusions, while omitting unnecessary details.\n"
+            #     "Omit detailed steps and explanations unless they are essential for understanding the main idea.\n"
+            #     "Keep the summary short and simple.\n"
+            #     "The summary should be brief.\n"
+            # )
+            summarizationPrompt = "You will get a reasoning chain that may have unnecessary details, repeated steps, or occasional backtracking. Your task is to shorten and clean it up by removing parts that do not support the main logic or conclusion. Keep only backtracking or repeated steps if they help clarify or double-check important points. Do not add new ideas or change the meaning. Try to keep the overall structure and logical flow, but provide enough explanation to make the reasoning clear and complete. Aim for a balance between brevity and clarity."
         elif difficulty_category == 'medium':
-            summarizationPrompt = (
-                "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
-                "Guidelines:\n"
-                "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
-                "Compress the explanation by rephrasing and omitting minor details, but do not lose important content.\n"
-                "Make sure the summary remains clear and faithful to the original logic.\n"
-                "The summary should be moderately detailed.\n"
-            )
+            # summarizationPrompt = (
+            #     "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
+            #     "Guidelines:\n"
+            #     "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
+            #     "Compress the explanation by rephrasing and omitting minor details, but do not lose important content.\n"
+            #     "Make sure the summary remains clear and faithful to the original logic.\n"
+            #     "The summary should be moderately detailed.\n"
+            # )
+            summarizationPrompt = "You will get a reasoning chain that may have unnecessary details, repeated steps, or occasional backtracking. Your task is to shorten and clean it up by removing parts that do not support the main logic or conclusion. Keep only backtracking or repeated steps if they help clarify or double-check important points. Do not add new ideas or change the meaning. Try to keep the overall structure and logical flow, but provide enough explanation to make the reasoning clear and complete. Aim for a balance between brevity and clarity."
+
         elif difficulty_category == 'hard':
-            summarizationPrompt = (
-                "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
-                "Guidelines:\n"
-                "Carefully retain the full structure of the reasoning, including important intermediate steps, assumptions, and conclusions.\n"
-                "Highlight subtle distinctions, exceptions, or caveats that are crucial to the argument’s validity.\n"
-                "Summarize with maximum precision—avoid oversimplification or omission of any detail that could alter the original meaning.\n"
-                "The summary should be detailed and comprehensive.\n"
-            )
+            # summarizationPrompt = (
+            #     "You are an expert at understanding reasoning steps. Your task is to condense a complex, multi-step reasoning process into a clear summary, preserving all key logical steps, nuanced arguments, and critical insights.\n\n"
+            #     "Guidelines:\n"
+            #     "Carefully retain the full structure of the reasoning, including important intermediate steps, assumptions, and conclusions.\n"
+            #     "Highlight subtle distinctions, exceptions, or caveats that are crucial to the argument’s validity.\n"
+            #     "Summarize with maximum precision—avoid oversimplification or omission of any detail that could alter the original meaning.\n"
+            #     "The summary should be detailed and comprehensive.\n"
+            # )
+            summarizationPrompt = "You will get a reasoning chain that may have unnecessary details, repeated steps, or occasional backtracking. Your task is to shorten and clean it up by removing parts that do not support the main logic or conclusion. Keep only backtracking or repeated steps if they help clarify or double-check important points. Do not add new ideas or change the meaning. Try to keep the overall structure and logical flow, but provide enough explanation to make the reasoning clear and complete. Aim for a balance between brevity and clarity."
         elif difficulty_category == 'unknown':        
-            summarizationPrompt = (
-                "You are a helpful and concise reasoning summarization assistant. Your task is to summarize a long chain of reasoning into a concise summary, while preserving the logical flow and key insights.\n\n"
-                "Guidelines:\n"
-                "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
-                "Be concise—rephrase and compress wherever possible without losing critical content.\n"
-                "Avoid omitting essential details that change the meaning or validity of the reasoning.\n"
-            )
+            # summarizationPrompt = (
+            #     "You are a helpful and concise reasoning summarization assistant. Your task is to summarize a long chain of reasoning into a concise summary, while preserving the logical flow and key insights.\n\n"
+            #     "Guidelines:\n"
+            #     "Retain the reasoning structure—capture important intermediate steps and conclusions.\n"
+            #     "Be concise—rephrase and compress wherever possible without losing critical content.\n"
+            #     "Avoid omitting essential details that change the meaning or validity of the reasoning.\n"
+            # )
+            summarizationPrompt = "You will get a reasoning chain that may have unnecessary details, repeated steps, or occasional backtracking. Your task is to shorten and clean it up by removing parts that do not support the main logic or conclusion. Keep only backtracking or repeated steps if they help clarify or double-check important points. Do not add new ideas or change the meaning. Try to keep the overall structure and logical flow, but provide enough explanation to make the reasoning clear and complete. Aim for a balance between brevity and clarity."
         else:
             raise ValueError(f"Difficulty category {difficulty_category} not supported")
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
@@ -853,9 +862,9 @@ class vLLMRollout(BaseRollout):
             raise ValueError(f"Model path {self.model_path} not supported")
             
     @retry(
-        stop=stop_after_attempt(5),                          # Try up to 5 times
-        wait=wait_exponential(multiplier=1, min=1, max=10),  # Wait: 1s, 2s, 4s, 8s, 10s
-        retry=retry_if_exception_type(requests.exceptions.RequestException)
+        stop=stop_after_attempt(3),                          # Reduced from 5 to 3 attempts
+        wait=wait_exponential(multiplier=2, min=2, max=30),  # Wait: 2s, 4s, 8s, 16s, 30s
+        retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout))
     )
     def query_vllm_summary_batch(self, prompts: List[str], max_tokens: int):
         """Batch query for vllm summarization endpoint using a single max_tokens value for all"""
@@ -879,7 +888,7 @@ class vLLMRollout(BaseRollout):
                 "top_k": 20,
                 # "presence_penalty": 1.5,
             },
-            timeout=60,
+            timeout=600,  # Increased from 200 to 600 seconds (10 minutes)
         )
 
         response.raise_for_status()
@@ -889,13 +898,13 @@ class vLLMRollout(BaseRollout):
     def create_vllm_summary_inputs(self, prompt_ids: List[int], summarized_think: str, res: dict) -> List[str]:
         prompt_str = self.tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
-        clean_summarized_think = self.clean_summarize_think(summarized_think, res)
+        # clean_summarized_think = self.clean_summarize_think(summarized_think, res)
 
-        new_prompt = prompt_str + "<think>" + clean_summarized_think + "</think>"
+        new_prompt = prompt_str + "<think>" + summarized_think + "</think>"
 
         new_prompt_ids = self.tokenizer.encode(new_prompt, add_special_tokens=True)
 
-        return new_prompt_ids, self.tokenizer.encode("<think>" + clean_summarized_think + "</think>", add_special_tokens=True)
+        return new_prompt_ids, self.tokenizer.encode("<think>" + summarized_think + "</think>", add_special_tokens=True)
     
     def clean_summarize_think(self, summarized_think: str, res: dict) -> str:
 

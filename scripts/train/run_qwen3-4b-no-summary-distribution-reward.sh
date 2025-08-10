@@ -5,10 +5,10 @@ set -x
 
 export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
-export RAY_TMPDIR="/nas-hdd/joykirat/tmp_ray"
+export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 
-export CUDA_VISIBLE_DEVICES=0,1
-EXPERIMENT_NAME=qwen4b_dapo_math_10k_context_distributed_reward_no_summary
+export CUDA_VISIBLE_DEVICES=3,4,5,6
+EXPERIMENT_NAME=qwen4b_dapo_math_10k_context_distributed_reward_no_summary_same_prompt
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=verlCheckpoint/NonSummary/$EXPERIMENT_NAME
 if [ "$WANDB_API_KEY" != "None" ]; then
@@ -28,7 +28,7 @@ fi
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/dapo-17k/train.parquet \
-    data.val_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/combined_test_dataset/test.parquet \
+    data.val_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/full_test_dataset/test.parquet \
     data.train_batch_size=8 \
     data.max_prompt_length=1024 \
     data.max_response_length=10000 \
@@ -40,7 +40,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.actor.clip_ratio_low=0.2 \
     actor_rollout_ref.actor.clip_ratio_high=0.28 \
@@ -52,12 +52,12 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.n=8 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     reward_model.reward_manager=SumDistribution \
@@ -65,7 +65,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name='verl_grpo_example_gsm8k' \
     trainer.experiment_name=${EXPERIMENT_NAME} \
-    trainer.n_gpus_per_node=2 \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.default_local_dir=${SAVE_PATH} \
     trainer.rollout_save_path=${ROLLOUT_SAVE_PATH} \
