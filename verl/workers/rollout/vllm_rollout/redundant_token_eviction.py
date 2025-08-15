@@ -14,25 +14,27 @@ def calculate_uniformity_score(step_importance: dict) -> float:
     Returns:
         Uniformity score (0-1)
     """
+    # Use entropy-based uniformity for stability.
+    # Maps perfectly uniform distributions to 1.0 and highly peaked ones to ~0.0.
     if len(step_importance) <= 1:
-        return 1.0  # No variation if only one step
-    
-    values = list(step_importance.values())
-    mean_val = np.mean(values)
-    std_val = np.std(values)
-    
-    # Coefficient of variation (CV) = std/mean
-    # Lower CV means more uniform
-    if mean_val == 0:
         return 1.0
-    
-    cv = std_val / mean_val
-    # Convert CV to uniformity score (0-1)
-    # CV of 0 = perfect uniformity (score 1)
-    # CV of 1 or higher = low uniformity (score 0)
-    uniformity_score = max(0, 1 - cv)
-    
-    return uniformity_score
+
+    values = np.array(list(step_importance.values()), dtype=float)
+    # Clamp negatives to zero (should not happen, but for safety)
+    values = np.clip(values, a_min=0.0, a_max=None)
+
+    total = float(values.sum())
+    if total <= 0.0:
+        return 1.0
+
+    p = values / total
+    # Numerical stability for log(0)
+    entropy = float(-(p * np.log(p + 1e-12)).sum())
+    max_entropy = float(np.log(len(values)))
+    if max_entropy == 0.0:
+        return 1.0
+
+    return float(entropy / max_entropy)
 
 def determine_eviction_percentage(uniformity_score: float, target_reduction: float = 0.25) -> float:
     """
@@ -303,12 +305,12 @@ def calculate_step_importance(
     
     return step_importance
 
-def run_eviction_algorithm(model_output, tokenizer, input_tokenized, target_reduction=0.25):
+def run_eviction_algorithm(attn_store, tokenizer, input_tokenized, target_reduction=0.25):
     """
     Run the redundant token eviction algorithm on the current example.
     
     Args:
-        model_output: Output from model with attention weights
+        attn_store: Dict mapping layer index -> attention tensor of shape [batch, seq_len, seq_len]
         tokenizer: Tokenizer for decoding
         input_tokenized: Tokenized input
         target_reduction: Target reduction percentage (e.g., 0.25 for 25% reduction)
@@ -316,9 +318,33 @@ def run_eviction_algorithm(model_output, tokenizer, input_tokenized, target_redu
     Returns:
         Tuple of (steps_to_evict, new_reasoning_chain)
     """
-    # Get attention weights from the model output
-    attention_weights = torch.stack(model_output.attentions)  # [layers, batch, heads, seq_len, seq_len]
-    attention_weights = attention_weights.squeeze(1)  # Remove batch dimension
+    # Build attention weights from the provided attn_store
+    # Expected by downstream: [layers, heads, seq_len, seq_len]
+    # We only have averaged-over-heads attention per layer, so we create a single synthetic head.
+    if not attn_store:
+        raise ValueError("attn_store is empty; cannot run eviction algorithm without attention tensors")
+
+    # Ensure layers are ordered by layer index
+    ordered_layer_indices = sorted(attn_store.keys())
+    per_layer_attn = [attn_store[layer_idx] for layer_idx in ordered_layer_indices]
+
+    # Stack to [layers, batch, seq_len, seq_len]
+    attention_weights = torch.stack(per_layer_attn, dim=0)
+
+    # Remove batch dimension if present and size 1 -> [layers, seq_len, seq_len]
+    if attention_weights.dim() == 4 and attention_weights.size(1) == 1:
+        attention_weights = attention_weights.squeeze(1)
+    elif attention_weights.dim() == 3:
+        # Already [layers, seq_len, seq_len]
+        pass
+    else:
+        raise ValueError(
+            f"Unexpected attention tensor shape from attn_store: {attention_weights.shape}. "
+            "Expected [layers, 1, seq_len, seq_len] or [layers, seq_len, seq_len]."
+        )
+
+    # Create a synthetic head dimension -> [layers, heads=1, seq_len, seq_len]
+    attention_weights = attention_weights.unsqueeze(1)
     
     # Extract reasoning tokens (everything before </think>)
     input_text = tokenizer.decode(input_tokenized['input_ids'][0], skip_special_tokens=True)
@@ -371,7 +397,7 @@ def test_algorithm():
     print("Algorithm implementation complete!")
     print("To use this algorithm:")
     print("1. Import the functions from this file")
-    print("2. Call run_eviction_algorithm(model_output, tokenizer, input_tokenized, target_reduction)")
+    print("2. Call run_eviction_algorithm(attn_store, tokenizer, input_tokenized, target_reduction)")
     print("3. The function will return (steps_to_evict, new_reasoning_chain)")
     
     return True 

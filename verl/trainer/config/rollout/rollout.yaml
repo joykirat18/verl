@@ -5,7 +5,7 @@ name: vllm
 mode: sync
 
 # summarize the rollouts
-summarize_rollouts: False
+summary_mode: 'None'
 
 # Sampling temperature for rollout.
 temperature: 1.0
@@ -108,13 +108,13 @@ val_kwargs:
   top_p: 1.0
 
   # Sampling temperature for rollout.
-  temperature: 0
+  temperature: 1.0
 
   # whether to repeat n times for validation
-  n: 1
+  n: 5
 
   # Whether to sample during training rollout. False uses greedy sampling.
-  do_sample: False
+  do_sample: True
 
 # Multi-turn interaction config for tools or chat.
 multi_turn:

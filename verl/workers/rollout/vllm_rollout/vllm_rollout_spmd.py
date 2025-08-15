@@ -56,9 +56,16 @@ from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
 from verl.utils.reward_score import default_compute_score
 from verl.utils.reward_score.math_verify_sum import getRawCorrectness
+from verl.workers.rollout.vllm_rollout.redundant_token_eviction import redundant_token_eviction
 import random
 import requests
 from uuid import UUID
+import requests
+import json
+import time
+import torch
+import numpy as np
+from tqdm import tqdm
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -170,7 +177,7 @@ class vLLMRollout(BaseRollout):
         if config.get("limit_images", None):  # support for multi-image data
             engine_kwargs["limit_mm_per_prompt"] = {"image": config.get("limit_images")}
 
-        self.summarize_rollouts = config.get('summarize_rollouts', False)
+        self.summary_mode = config.get('summary_mode', 'None')
 
         self.inference_engine = LLM(
             model=model_path,
@@ -242,6 +249,7 @@ class vLLMRollout(BaseRollout):
             return self.generate_original_sequences(prompts, **kwargs)
         else:
             return self.generate_summarization_sequences(prompts, **kwargs)
+
 
 
     @GPUMemoryLogger(role="vllm rollout spmd", logger=logger)
@@ -337,6 +345,7 @@ class vLLMRollout(BaseRollout):
                 ] * batch_size
 
         # users can customize different sampling_params at different run
+        print("Self.sampling_params: ", self.sampling_params)
         with self.update_sampling_params(**kwargs):
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
@@ -567,9 +576,10 @@ class vLLMRollout(BaseRollout):
                     summary_inputs.append({'think_str': think_str, 'difficulty_category': self.get_difficulty_class(difficulty)})
                     correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str, 'difficulty': difficulty, 'uuid': uuid, 'data_source': data_source, 'reward_model': reward_model})
 
-            if self.summarize_rollouts == False:
+            if self.summary_mode == 'None':
                 summary_inputs = []
             print(f"Summarizing {len(summary_inputs)} responses")
+
             if len(summary_inputs) == 0:
                 final_response = [res["response_ids"] for res in response]
                 response_is_summarized = [False] * len(final_response)
@@ -577,7 +587,13 @@ class vLLMRollout(BaseRollout):
                 difficulty_list = [res['difficulty'] for res in response]
             else:
                 original_uuid_list = [res['uuid'] for res in response]
-                summary_outputs = self.summarize_think(summary_inputs)
+                if self.summary_mode == 'attention_weights':
+                    summary_outputs = self.summarize_attention_weights(summary_inputs)
+                elif self.summary_mode == 'self_summary':
+                    summary_outputs = self.summarize_think(summary_inputs)
+                else:
+                    raise ValueError(f"Invalid summary mode: {self.summary_mode}")
+                
                 for i, summary_output in enumerate(summary_outputs):
                     correct_format_response[i]["summary_output"] = summary_output
                 
@@ -671,12 +687,21 @@ class vLLMRollout(BaseRollout):
         response_position_ids = position_ids[..., -1:] + delta_position_id
         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
 
-        response_attention_mask = self.get_custom_response_mask(
-            response_id=final_response, 
-            eos_token=eos_token_id, 
-            dtype=attention_mask.dtype,
-            is_summarized_list=response_is_summarized,
-        )
+        if self.summary_mode == 'attention_weights':
+            response_attention_mask = get_response_mask(
+                response_id=final_response, 
+                eos_token=eos_token_id, 
+                dtype=attention_mask.dtype
+            )
+        elif self.summary_mode == 'self_summary':
+            response_attention_mask = self.get_custom_response_mask(
+                response_id=final_response, 
+                eos_token=eos_token_id, 
+                dtype=attention_mask.dtype,
+                is_summarized_list=response_is_summarized,
+            )
+        else:
+            raise ValueError(f"Invalid summary mode: {self.summary_mode}")
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
@@ -839,6 +864,50 @@ class vLLMRollout(BaseRollout):
             return prompt, tokenized_prompt
         else:
             raise ValueError(f"Model path {self.model_path} not supported")
+    
+    def summarize_attention_weights(self, summary_inputs) -> List[str]:
+        if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
+            summary_outputs = []
+            for input in tqdm(summary_inputs):
+                text = input['think_str']
+                difficulty_category = input['difficulty_category']
+                reduction_score = self.get_reduction_score(difficulty_category)
+
+                text = "<think>" + text + "Time is up. Given the time I've spent and the approaches I've tried, I should stop thinking and now write summarization in one sentence.</think>"
+                # API configuration
+                BASE_URL = "http://localhost:8000"
+                API_ENDPOINTS = {
+                    "health": f"{BASE_URL}/health",
+                    "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
+                }
+                payload = {
+                    "text": text,
+                    "reduction_score": reduction_score
+                }
+                response = requests.post(API_ENDPOINTS["get_reduced_reasoning_chain"], json=payload)
+
+                if response.status_code == 200:
+                    data = response.json()
+
+                    new_reasoning_chain = data['new_reasoning_chain']
+                    if "Time is up. Given the time I've spent and the approaches I've tried, I should stop thinking and now write summarization in one sentence." in new_reasoning_chain:
+                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. Given the time I've spent and the approaches I've tried, I should stop thinking and now write summarization in one sentence.", "")
+
+                    summary_outputs.append(new_reasoning_chain)
+                else:
+                    raise ValueError(f"Failed to get model output: {response.status_code}")
+                
+        else:
+            raise ValueError(f"Model path {self.model_path} not supported")
+        return summary_outputs
+    
+    def get_reduction_score(self, difficulty_category: str) -> float:
+        if difficulty_category == 'easy':
+            return 0.75
+        elif difficulty_category == 'medium':
+            return 0.5
+        elif difficulty_category == 'hard':
+            return 0.25
         
     def summarize_think(self, summary_inputs) -> List[str]:
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
@@ -861,6 +930,34 @@ class vLLMRollout(BaseRollout):
         else:
             raise ValueError(f"Model path {self.model_path} not supported")
             
+    def convert_to_torch_format(self, serialized_data: dict) -> dict:
+        """
+        Convert serialized data back to PyTorch tensor format.
+        
+        Args:
+            serialized_data: Dictionary containing serialized input_ids and attention_weights
+            
+        Returns:
+            Dictionary with PyTorch tensors
+        """
+        try:
+            # Convert input_ids back to tensor
+            input_ids = torch.tensor(serialized_data["input_ids"], dtype=torch.long)
+            
+            # Convert attention weights back to tensors
+            attention_weights = []
+            for layer_attentions in serialized_data["attention_weights"]:
+                layer_tensor = torch.tensor(layer_attentions, dtype=torch.float32)
+                attention_weights.append(layer_tensor)
+            
+            return {
+                "input_ids": input_ids,
+                "attention_weights": attention_weights
+            }
+        except Exception as e:
+            print(f"Error converting to torch format: {e}")
+            raise ValueError(f"Failed to convert data to torch format: {str(e)}")
+
     @retry(
         stop=stop_after_attempt(3),                          # Reduced from 5 to 3 attempts
         wait=wait_exponential(multiplier=2, min=2, max=30),  # Wait: 2s, 4s, 8s, 16s, 30s
