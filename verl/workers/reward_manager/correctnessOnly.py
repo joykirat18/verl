@@ -323,6 +323,7 @@ class CorrectnessOnlyRewardManager:
                     'difficulty': scores['difficulty'],
                     'reason': reason,
                     'final_reward': reward,
+                    'uuid': scores['uuid'],
                 }
                 save_file.write(json.dumps(save_json_line, ensure_ascii=False) + '\n')
 

@@ -50,13 +50,14 @@ from vllm.lora.request import LoRARequest
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.worker.worker_base import WorkerWrapperBase
 
+from math_verify import parse, verify
 from verl import DataProto
 from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
 from verl.utils.reward_score import default_compute_score
 from verl.utils.reward_score.math_verify_sum import getRawCorrectness
-from verl.workers.rollout.vllm_rollout.redundant_token_eviction import redundant_token_eviction
+# from verl.workers.rollout.vllm_rollout.redundant_token_eviction import redundant_token_eviction
 import random
 import requests
 from uuid import UUID
@@ -66,8 +67,10 @@ import time
 import torch
 import numpy as np
 from tqdm import tqdm
-
+from typing import Dict
+import math
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from verl.workers.rollout.vllm_rollout.redundant_token_eviction_confidence import redundant_token_eviction
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -511,6 +514,7 @@ class vLLMRollout(BaseRollout):
                     LoRARequest(lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/simon-stub-path")
                 ] * batch_size
         
+        kwargs["logprobs"] = 20
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
@@ -533,7 +537,10 @@ class vLLMRollout(BaseRollout):
                 for sample_id in range(len(output.outputs)):
                     response_ids = output.outputs[sample_id].token_ids
                     prompt_ids = output.prompt_token_ids
-                    response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "summarized": False, "uuid": uuid_list[counter], 'data_source': data_source_list[counter], 'reward_model': reward_model_list[counter]})
+                    confidence_scores = []
+                    for i, logprob in enumerate(output.outputs[sample_id].logprobs):
+                        confidence_scores.append((self.token_confidence(logprob), response_ids[i]))
+                    response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "summarized": False, "uuid": uuid_list[counter], 'data_source': data_source_list[counter], 'reward_model': reward_model_list[counter], 'confidence_scores': confidence_scores})
                     counter += 1
                     if self.config.calculate_log_probs:
                         curr_log_prob = []
@@ -557,6 +564,7 @@ class vLLMRollout(BaseRollout):
                     else:
                         score_list.append(0)
                 uuid_difficulty[id] = sum(score_list) / len(score_list)
+                print(f"difficulty: {uuid_difficulty[id]}")
         
 
             # breakpoint()
@@ -571,9 +579,13 @@ class vLLMRollout(BaseRollout):
                 res['difficulty'] = difficulty
                 data_source = res['data_source']
                 reward_model = res['reward_model']
-                correct_format, think_str = self.check_format(self.model_path, response_ids)
-                if (correct_format):
-                    summary_inputs.append({'think_str': think_str, 'difficulty_category': self.get_difficulty_class(difficulty)})
+                confidence_scores = res['confidence_scores']
+                correct_format, think_str, confidence_scores = self.check_format(self.model_path, response_ids, confidence_scores)
+                # breakpoint()
+                score = default_compute_score(data_source, self.tokenizer.decode(response_ids), reward_model['ground_truth'], self.model_path)['score']
+                answer = res['reward_model']['ground_truth']
+                if (correct_format and score > 0):
+                    summary_inputs.append({'think_str': think_str, 'difficulty_category': self.get_difficulty_class(difficulty), 'reward_model': reward_model, 'confidence_scores': confidence_scores})
                     correct_format_response.append({"prompt_ids": prompt_ids, "response_ids": response_ids, "think_str": think_str, 'difficulty': difficulty, 'uuid': uuid, 'data_source': data_source, 'reward_model': reward_model})
 
             if self.summary_mode == 'None':
@@ -589,8 +601,12 @@ class vLLMRollout(BaseRollout):
                 original_uuid_list = [res['uuid'] for res in response]
                 if self.summary_mode == 'attention_weights':
                     summary_outputs = self.summarize_attention_weights(summary_inputs)
+                elif self.summary_mode == 'confidence_scores':
+                    summary_outputs = self.summarize_confidence_scores(summary_inputs)
                 elif self.summary_mode == 'self_summary':
                     summary_outputs = self.summarize_think(summary_inputs)
+                elif self.summary_mode == 'early_exit_attention_weights' or self.summary_mode == 'early_exit':
+                    summary_outputs = self.summarize_early_exit_attention_weights(summary_inputs)
                 else:
                     raise ValueError(f"Invalid summary mode: {self.summary_mode}")
                 
@@ -687,7 +703,7 @@ class vLLMRollout(BaseRollout):
         response_position_ids = position_ids[..., -1:] + delta_position_id
         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
 
-        if self.summary_mode == 'attention_weights':
+        if self.summary_mode == 'None' or self.summary_mode == 'attention_weights' or self.summary_mode == 'early_exit_attention_weights' or self.summary_mode == 'early_exit' or self.summary_mode == 'confidence_scores':
             response_attention_mask = get_response_mask(
                 response_id=final_response, 
                 eos_token=eos_token_id, 
@@ -700,6 +716,14 @@ class vLLMRollout(BaseRollout):
                 dtype=attention_mask.dtype,
                 is_summarized_list=response_is_summarized,
             )
+        # elif self.summary_mode == 'attention_weights':
+        #     response_is_summarized = [not is_summarized for is_summarized in response_is_summarized]
+        #     response_attention_mask = self.get_custom_response_mask(
+        #         response_id=final_response, 
+        #         eos_token=eos_token_id, 
+        #         dtype=attention_mask.dtype,
+        #         is_summarized_list=response_is_summarized,
+        #     )
         else:
             raise ValueError(f"Invalid summary mode: {self.summary_mode}")
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
@@ -721,13 +745,67 @@ class vLLMRollout(BaseRollout):
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
     
+    def token_confidence(self, top_logprobs: Dict[str, float]) -> float:
+        """
+        Compute Ci = -(1/k) * sum_{j=1..k} log P_i(j)
+        where P_i(j) is probability of the j-th top token at step i.
+        """
+        # take top-k tokens (truncate if fewer available)
+        # pro
+        items = [v.logprob for v in top_logprobs.values()]
+        # if token_id in top_logprobs:
+        #     items.append(top_logprobs[token_id].logprob)
+        # mean_logprob = sum(items) / len(items)
+        # return -mean_logprob
+        probs = [math.exp(lp) for lp in items]  # logprob -> prob
+        Z = sum(probs)
+        probs = [p / Z for p in probs]
+
+        # Entropy = -sum(p * log(p))
+        entropy = -sum(p * math.log(p + 1e-12) for p in probs)
+
+        # confidence of distribution
+        # Max entropy depends on k
+        k = len(probs)
+        H_max = math.log(k)
+
+        confidence = 1 - (entropy / H_max)
+        return confidence
+
+        # Confidence of chosen token = its probability
+
+        # if len(probs) == 0:
+        #     return 0.0
+        # avg_logprob = sum(math.log(p) for p in probs) / len(probs)
+        # return -avg_logprob
+
     def get_complete_summary_rollouts(self, summarized_response):
         response_ids_with_summarized_thinking = summarized_response['response_ids_with_summarized_thinking']
         summarized_response_ids = summarized_response['summarized_response_ids']
         
         return response_ids_with_summarized_thinking + summarized_response_ids
 
-    
+    def remove_answer_from_think_str(self, think_str, answer):
+        import re
+        # Remove the last reasoning step if it contains the answer (either as a substring or as \boxed{answer})
+        if answer is not None and isinstance(think_str, str) and think_str.strip():
+            # Split into reasoning steps (by double newlines)
+            steps = think_str.strip().split('\n\n')
+            answer_str = str(answer).strip()
+            
+            # Recursively remove last step if it contains the answer or \boxed{answer}
+            while steps:
+                last_step = steps[-1]
+                boxed_match = re.search(r'\\boxed\{([A-Za-z0-9]+)\}', last_step)
+                if (answer_str and answer_str in last_step) or boxed_match:
+                    steps = steps[:-1]
+                else:
+                    break
+            think_str = '\n\n'.join(steps)
+        return think_str
+
+        
+
     def get_difficulty_class(self, difficulty):
         if difficulty == None:
             return "unknown"
@@ -790,16 +868,74 @@ class vLLMRollout(BaseRollout):
                 seen.add(uuid_obj)
                 unique_list.append(str(uuid_obj))  # or append uuid_obj if you want UUID objects
         return unique_list
-    def check_format(self, model_path: str, response_ids: list[int]) -> bool:
+    def check_format(self, model_path: str, response_ids: list[int], confidence_scores: list[tuple[float, str]]):
+        """
+        Checks if the response is in the correct format and returns the <think>...</think> span,
+        along with the trimmed confidence scores corresponding to that span.
+        The confidence_scores is a list of tuples: (value, [response_ids[i]])
+        The second element is used as a signal to trim.
+        """
         response_str = self.tokenizer.decode(response_ids)
-        if model_path == "Qwen/Qwen3-4B" or model_path == "Qwen/Qwen3-8B":
-            import re
+        import re
+        # Helper to trim confidence_scores using the token string signal
+        def trim_confidence_scores_by_token_string(confidence_scores, start_token, end_token):
+            start_idx = None
+            end_idx = None
+            for idx, (_, token_id) in enumerate(confidence_scores):
+                token_str = self.tokenizer.convert_ids_to_tokens(token_id)
+                if start_idx is None and token_str == start_token:
+                    start_idx = idx
+                if start_idx is not None and token_str == end_token:
+                    end_idx = idx
+                    break
+            if start_idx is not None and end_idx is not None:
+                return confidence_scores[start_idx:end_idx]
+            else:
+                return confidence_scores
+
+        # Qwen models: <think>...</think>
+        if model_path in ["Qwen/Qwen3-4B", "Qwen/Qwen3-8B"]:
             pattern = r"<think>(.*?)</think>"
             match = re.findall(pattern, response_str, re.DOTALL)
             if match and len(match) == 1:
-                return True, match[0]
+                # Use the second element of confidence_scores to trim between <think> and </think>
+                think_start_token = "<think>"
+                think_end_token = "</think>"
+                trimmed_confidence_scores = trim_confidence_scores_by_token_string(
+                    confidence_scores,
+                    think_start_token,
+                    think_end_token
+                )
+                return True, match[0], trimmed_confidence_scores
             else:
-                return False, None
+                return False, None, []
+
+        # DeepSeek models: (.*?)</think>
+        elif model_path in [
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+        ]:
+            pattern = r"(.*?)</think>"
+            match = re.findall(pattern, response_str, re.DOTALL)
+            if match and len(match) == 1:
+                # Use the second element of confidence_scores to trim up to </think>
+                think_end_token = "</think>"
+                # For DeepSeek, we want everything up to and including the first </think>
+                start_idx = 0
+                end_idx = None
+                for idx, (_, token_id) in enumerate(confidence_scores):
+                    token_str = self.tokenizer.convert_ids_to_tokens(token_id)
+                    if token_str == think_end_token:
+                        end_idx = idx
+                        break
+                if end_idx is not None:
+                    trimmed_confidence_scores = confidence_scores[start_idx:end_idx+1]
+                else:
+                    trimmed_confidence_scores = confidence_scores
+                return True, match[0], trimmed_confidence_scores
+            else:
+                return False, None, []
+
         else:
             raise ValueError(f"Model path {model_path} not supported")
     
@@ -864,7 +1000,41 @@ class vLLMRollout(BaseRollout):
             return prompt, tokenized_prompt
         else:
             raise ValueError(f"Model path {self.model_path} not supported")
-    
+
+    def summarize_confidence_scores(self, summary_inputs) -> List[str]:
+        summary_outputs = []
+        for input in tqdm(summary_inputs):
+            
+            text = input['think_str']
+            difficulty_category = input['difficulty_category']
+            confidence_scores = input['confidence_scores']
+            reduction_score = self.get_reduction_score(difficulty_category)
+
+            # for i in range(len(input_ids)):
+                # print(self.tokenizer.convert_ids_to_tokens([input_ids[i]]), confidence_scores[i][1])
+
+            # breakpoint()
+            confidence_scores = confidence_scores[:-1]
+
+            input_ids = [score[1] for score in confidence_scores]
+            text = self.tokenizer.decode(input_ids)
+            confidence_scores = [score[0] for score in confidence_scores]
+
+            try:
+                steps_to_evict, new_reasoning_chain = redundant_token_eviction(
+                        reasoning_chain=text,
+                        confidence_scores=confidence_scores,
+                        tokenizer=self.tokenizer,
+                        input_ids=input_ids,
+                        target_reduction=reduction_score
+                    )   
+            except Exception as e:
+                print(f"Error: {e}")
+                new_reasoning_chain = text
+                
+            summary_outputs.append(new_reasoning_chain)
+        return summary_outputs
+
     def summarize_attention_weights(self, summary_inputs) -> List[str]:
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
             summary_outputs = []
@@ -872,10 +1042,10 @@ class vLLMRollout(BaseRollout):
                 text = input['think_str']
                 difficulty_category = input['difficulty_category']
                 reduction_score = self.get_reduction_score(difficulty_category)
-
-                text = "<think>" + text + "Time is up. Given the time I've spent and the approaches I've tried, I should stop thinking and now write summarization in one sentence.</think>"
+                
+                text = "<think>" + text + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
                 # API configuration
-                BASE_URL = "http://localhost:8000"
+                BASE_URL = "http://localhost:8008"
                 API_ENDPOINTS = {
                     "health": f"{BASE_URL}/health",
                     "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
@@ -890,8 +1060,46 @@ class vLLMRollout(BaseRollout):
                     data = response.json()
 
                     new_reasoning_chain = data['new_reasoning_chain']
-                    if "Time is up. Given the time I've spent and the approaches I've tried, I should stop thinking and now write summarization in one sentence." in new_reasoning_chain:
-                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. Given the time I've spent and the approaches I've tried, I should stop thinking and now write summarization in one sentence.", "")
+                    if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
+                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                    # if '<think>' in new_reasoning_chain:
+                    #     new_reasoning_chain = new_reasoning_chain.replace('<think>', '')
+                    # if '</think>' in new_reasoning_chain:
+                    #     new_reasoning_chain = new_reasoning_chain.replace('</think>', '')
+
+                    summary_outputs.append(new_reasoning_chain)
+                else:
+                    raise ValueError(f"Failed to get model output: {response.status_code}")
+        elif self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+            summary_outputs = []
+            for input in tqdm(summary_inputs):
+                text = input['think_str']
+                difficulty_category = input['difficulty_category']
+                reduction_score = self.get_reduction_score(difficulty_category)
+
+                text = "<think>\n" + text + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
+                # API configuration
+                BASE_URL = "http://localhost:8005"
+                API_ENDPOINTS = {
+                    "health": f"{BASE_URL}/health",
+                    "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
+                }
+                payload = {
+                    "text": text,
+                    "reduction_score": reduction_score
+                }
+                response = requests.post(API_ENDPOINTS["get_reduced_reasoning_chain"], json=payload)
+
+                if response.status_code == 200:
+                    data = response.json()
+
+                    new_reasoning_chain = data['new_reasoning_chain']
+                    if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
+                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                    if '<think>\n' in new_reasoning_chain:
+                        new_reasoning_chain = new_reasoning_chain.replace('<think>\n', '')
+                    # if '</think>' in new_reasoning_chain:
+                    #     new_reasoning_chain = new_reasoning_chain.replace('</think>', '')
 
                     summary_outputs.append(new_reasoning_chain)
                 else:
@@ -901,13 +1109,145 @@ class vLLMRollout(BaseRollout):
             raise ValueError(f"Model path {self.model_path} not supported")
         return summary_outputs
     
+    def summarize_early_exit_attention_weights(self, summary_inputs) -> List[str]:
+        if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
+            summary_outputs = []
+            for input in tqdm(summary_inputs):
+                text = input['think_str']
+                difficulty_category = input['difficulty_category']
+                reduction_score = self.get_reduction_score(difficulty_category)
+
+                ground_truth = input['reward_model']['ground_truth']
+
+                first_correct_answer_chain, remaining_answer_chain = self.get_first_correct_answer_chain(text, ground_truth)
+
+                if self.summary_mode == 'early_exit':
+                    if first_correct_answer_chain == "":
+                        summary_outputs.append(remaining_answer_chain)
+                    else:
+                        summary_outputs.append(first_correct_answer_chain)
+                elif self.summary_mode == 'early_exit_attention_weights':
+
+                    text = "<think>" + remaining_answer_chain + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
+                    # API configuration
+                    BASE_URL = "http://localhost:8005"
+                    API_ENDPOINTS = {
+                        "health": f"{BASE_URL}/health",
+                        "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
+                    }
+                    payload = {
+                        "text": text,
+                        "reduction_score": reduction_score
+                    }
+                    response = requests.post(API_ENDPOINTS["get_reduced_reasoning_chain"], json=payload)
+
+                    if response.status_code == 200:
+                        data = response.json()
+
+                        new_reasoning_chain = data['new_reasoning_chain']
+                        if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                        if '<think>' in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace('<think>', '')
+                        if '</think>' in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace('</think>', '')
+
+                        new_reasoning_chain = "<think>" + first_correct_answer_chain + new_reasoning_chain + "</think>"
+                        summary_outputs.append(new_reasoning_chain)
+                    else:
+                        raise ValueError(f"Failed to get model output: {response.status_code}")
+
+        elif self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+            summary_outputs = []
+            for input in tqdm(summary_inputs):
+                text = input['think_str']
+                difficulty_category = input['difficulty_category']
+                reduction_score = self.get_reduction_score(difficulty_category)
+                
+                ground_truth = input['reward_model']['ground_truth']
+
+                first_correct_answer_chain, remaining_answer_chain = self.get_first_correct_answer_chain(text, ground_truth)
+
+                if self.summary_mode == 'early_exit':
+                    if first_correct_answer_chain == "":
+                        summary_outputs.append(remaining_answer_chain)
+                    else:
+                        summary_outputs.append(first_correct_answer_chain)
+                elif self.summary_mode == 'early_exit_attention_weights':
+                    text = "<think>\n" + remaining_answer_chain + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
+                    
+                    BASE_URL = "http://localhost:8005"
+                    API_ENDPOINTS = {
+                        "health": f"{BASE_URL}/health",
+                        "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
+                    }
+                    payload = {
+                        "text": text,
+                        "reduction_score": reduction_score
+                    }
+                    response = requests.post(API_ENDPOINTS["get_reduced_reasoning_chain"], json=payload)
+                    
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+
+                        new_reasoning_chain = data['new_reasoning_chain']
+                        if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                        if '<think>\n' in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace('<think>\n', '')
+                        if '</think>' in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace('</think>', '')
+
+                        new_reasoning_chain = "<think>\n" + first_correct_answer_chain + new_reasoning_chain + "</think>"
+                        summary_outputs.append(new_reasoning_chain)
+                    else:
+                        raise ValueError(f"Failed to get model output: {response.status_code}")
+        else:
+            raise ValueError(f"Model path {self.model_path} not supported")
+        return summary_outputs
+            
+
+    def get_first_correct_answer_chain(self, text: str, ground_truth: str):
+        """
+        Splits the reasoning chain into chunks, finds the first occurrence where the generated answer matches the ground truth,
+        and returns the reasoning up to and including that chunk as the first part, and the rest as the second part.
+
+        Args:
+            text (str): The full reasoning chain, with chunks separated by double newlines.
+            ground_truth (str): The ground truth answer.
+
+        Returns:
+            Tuple[str, str]: (first_correct_answer_chain, remaining_answer_chain)
+        """
+        split_text = text.split('\n\n')
+        first_correct_answer_chain = []
+        found = False
+        ground_truth_answer = parse(ground_truth)
+        for i, chunk in enumerate(split_text):
+            generated_answer = parse(chunk)
+            first_correct_answer_chain.append(chunk)
+            if verify(ground_truth_answer, generated_answer):
+                found = True
+                break
+        if found:
+            # Chunks up to and including the first correct answer
+            first_half = "\n\n".join(first_correct_answer_chain)
+            # Remaining chunks after the first correct answer
+            remaining_half = "\n\n".join(split_text[i+1:])
+        else:
+            # If no correct answer found, all reasoning is in the second half, first half is empty
+            first_half = ""
+            remaining_half = "\n\n".join(split_text)
+        return first_half, remaining_half
+
     def get_reduction_score(self, difficulty_category: str) -> float:
         if difficulty_category == 'easy':
-            return 0.75
+            return 0.6
         elif difficulty_category == 'medium':
-            return 0.5
+            return 0.4
         elif difficulty_category == 'hard':
-            return 0.25
+            return 0.2
         
     def summarize_think(self, summary_inputs) -> List[str]:
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
@@ -997,11 +1337,21 @@ class vLLMRollout(BaseRollout):
 
         # clean_summarized_think = self.clean_summarize_think(summarized_think, res)
 
-        new_prompt = prompt_str + "<think>" + summarized_think + "</think>"
+        if self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+            new_prompt = prompt_str + summarized_think + "</think>"
+        elif self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
+            new_prompt = prompt_str + "<think>" + summarized_think + "</think>"
+        else:
+            raise ValueError(f"Model path {self.model_path} not supported")
 
         new_prompt_ids = self.tokenizer.encode(new_prompt, add_special_tokens=True)
 
-        return new_prompt_ids, self.tokenizer.encode("<think>" + summarized_think + "</think>", add_special_tokens=True)
+        if self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+            return new_prompt_ids, self.tokenizer.encode(summarized_think + "</think>", add_special_tokens=True)
+        elif self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
+            return new_prompt_ids, self.tokenizer.encode("<think>" + summarized_think + "</think>", add_special_tokens=True)
+        else:
+            raise ValueError(f"Model path {self.model_path} not supported")
     
     def clean_summarize_think(self, summarized_think: str, res: dict) -> str:
 

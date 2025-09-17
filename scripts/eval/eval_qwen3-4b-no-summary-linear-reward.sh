@@ -7,8 +7,8 @@ export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
 export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 
-export CUDA_VISIBLE_DEVICES=5,6
-EXPERIMENT_NAME=qwen4b_dapo_math_10k_context_linear_reward_no_summary
+export CUDA_VISIBLE_DEVICES=6,7
+EXPERIMENT_NAME=qwen4b_dapo_math_10k_context_linear_reward_no_summary_no_difficulty
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/train/verlCheckpoint/NonSummary/$EXPERIMENT_NAME
 if [ "$WANDB_API_KEY" != "None" ]; then
@@ -28,7 +28,7 @@ fi
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/dapo-17k/train.parquet \
-    data.val_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/full_test_dataset/test.parquet \
+    data.val_files=/nas-ssd2/joykirat/code/verl-fork/verl/scripts/data/superGPQA_test_dataset/test.parquet \
     data.train_batch_size=8 \
     data.max_prompt_length=1024 \
     data.max_response_length=10000 \

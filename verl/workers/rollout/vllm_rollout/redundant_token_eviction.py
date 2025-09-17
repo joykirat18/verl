@@ -113,6 +113,10 @@ def redundant_token_eviction(
     
     # Calculate uniformity score
     uniformity_score = calculate_uniformity_score(step_importance)
+
+    if uniformity_score != uniformity_score:  # check for NaN
+        # If uniformity_score is NaN, return original reasoning (no eviction)
+        return [], reasoning_chain
     
     # Determine eviction percentage based on uniformity
     eviction_percentage = determine_eviction_percentage(uniformity_score, target_reduction)
@@ -120,6 +124,7 @@ def redundant_token_eviction(
     print(f"Eviction percentage: {eviction_percentage}")
     print(f"Uniformity score: {uniformity_score}")
     print(f"len of reasoning steps: {len(reasoning_steps)}")
+    print(f"First reasoning step: {reasoning_steps[0]}")
     
     # Calculate the number of reasoning steps to evict based on percentage
     num_steps_to_evict = int(len(reasoning_steps) * eviction_percentage)
@@ -142,18 +147,17 @@ def redundant_token_eviction(
     for i, step in enumerate(reasoning_steps):
         if i not in steps_to_evict:
             new_reasoning_steps.append(step)
+
+    print(f"Length of new reasoning steps: {len(new_reasoning_steps)}")
     
-    # Join the remaining steps back into a reasoning chain
-    # Convert token lists back to text properly
-    new_reasoning_chain_parts = []
+    # Reconstruct the reasoning chain by concatenating all remaining tokens
+    # This maintains the original tokenization structure
+    all_tokens = []
     for step in new_reasoning_steps:
-        # Convert tokens back to text using the tokenizer
-        step_text = tokenizer.convert_tokens_to_string(step)
-        # # Clean up any remaining special characters
-        # step_text = step_text.replace("Ġ", " ").replace("Ċ", "\n").replace("ÄĬ", "").strip()
-        new_reasoning_chain_parts.append(step_text)
+        all_tokens.extend(step)
     
-    new_reasoning_chain = " ".join(new_reasoning_chain_parts)
+    # Convert the complete token list back to text using the tokenizer
+    new_reasoning_chain = tokenizer.convert_tokens_to_string(all_tokens)
     
     return steps_to_evict, new_reasoning_chain
 

@@ -39,6 +39,16 @@ def getCorrectness(model_name: str, model_output: str, ground_truth: str) -> boo
             model_output = model_output.split('</think>')[-1]
         else:
             return 0.0
+    elif model_name == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or model_name == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+        if '</think>' in model_output:
+            model_output = model_output.split('</think>')[-1]
+        else:
+            return 0.0
+    elif model_name == "/nas-ssd2/joykirat/code/verl-fork/baselines/LC-R1/scripts/DeepSeek-R1-Distill-Qwen-7B-LCR1/ckpt/checkpoint-125":
+        if '</think>' in model_output:
+            model_output = model_output.split('</think>')[-1]
+        else:
+            return 0.0
     else:
         raise ValueError(f"Model name {model_name} not supported")
 
@@ -63,6 +73,16 @@ def get_soft_format_score(model_name: str, model_output:str) -> float:
             return 0.25
         else:
             return 0.0
+    elif model_name == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or model_name == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+        if model_output.count('</think>') == 1:
+            return 0.25
+        else:
+            return 0
+    elif model_name == "/nas-ssd2/joykirat/code/verl-fork/baselines/LC-R1/scripts/DeepSeek-R1-Distill-Qwen-7B-LCR1/ckpt/checkpoint-125":
+        if model_output.count('</think>') == 1:
+            return 0.25
+        else:
+            return 0
     else:
         raise ValueError(f"Model name {model_name} not supported")
 
@@ -79,6 +99,10 @@ def get_hard_format_score(model_name: str, model_output:str) -> float:
         if think_pos > think_end_pos:
             return 0.0
         return 0.25
+    elif model_name == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or model_name == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+        return 0.0
+    elif model_name == "/nas-ssd2/joykirat/code/verl-fork/baselines/LC-R1/scripts/DeepSeek-R1-Distill-Qwen-7B-LCR1/ckpt/checkpoint-125":
+        return 0.0
     else:
         raise ValueError(f"Model name {model_name} not supported")
         
@@ -89,6 +113,9 @@ def compute_score(model_output: str, ground_truth: str, model_name: str, timeout
 
     soft_format_score = get_soft_format_score(model_name, model_output)
     hard_format_score = get_hard_format_score(model_name, model_output)
+
+    # soft_format_score = 0.0
+    # hard_format_score = 0.0
 
     return {'score': correctness, 'soft_format': soft_format_score, 'hard_format': hard_format_score}
 

@@ -5,7 +5,8 @@ Test script for the Redundant Token Eviction via Self-summarization algorithm.
 
 import torch
 from transformers import AutoTokenizer, AutoModel
-from verl.workers.rollout.vllm_rollout.redundant_token_eviction import run_eviction_algorithm
+# from verl.workers.rollout.vllm_rollout.redundant_token_eviction import run_eviction_algorithm
+from verl.workers.rollout.vllm_rollout.random_token_eviction import run_eviction_algorithm
 import os
 
 os.environ['HF_HOME'] = '/nas-ssd2/joykirat/.cache/huggingface'

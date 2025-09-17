@@ -41,7 +41,7 @@ def default_compute_score(
     Raises:
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
-    if data_source == 'math-numina' or data_source == 'math-aime' or data_source == 'math-amc' or data_source == 'olympiad' or data_source == 'commonsense' or data_source == 'ARC-Easy' or data_source == 'ARC-Challenge' or data_source == 'gpqa' or data_source == "DAPO-Math-17k":
+    if data_source == 'math-numina' or data_source == 'math-aime' or data_source == 'math-amc' or data_source == 'olympiad' or data_source == 'commonsense' or data_source == 'ARC-Easy' or data_source == 'ARC-Challenge' or data_source == 'gpqa' or data_source == "DAPO-Math-17k" or data_source == "mip-insufficient" or data_source == "mip-question" or data_source == "bbh_boolean_expressions" or data_source == "bbh_causal_judgement" or data_source == "bbh_date_understanding" or data_source == "bbh_disambiguation_qa" or data_source == "bbh_logical_deduction_five_objects" or data_source == "bbh_movie_recommendation" or data_source == "bbh_navigate" or data_source == "bbh_object_counting" or data_source == "bbh_snarks" or data_source == "overthink-bench" or data_source == "underthink-bench" or data_source == "bbeh" or data_source == "superGPQA_easy" or data_source == "superGPQA_middle" or data_source == "superGPQA_hard":
         from . import math_verify_sum
         res = math_verify_sum.compute_score(solution_str, ground_truth, model_name)
     
