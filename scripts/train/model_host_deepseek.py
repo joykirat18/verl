@@ -199,7 +199,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "model_host_deepseek:app",
         host="0.0.0.0",
-        port=8005,
+        port=8008,
         reload=False,
         log_level="info"
     ) 

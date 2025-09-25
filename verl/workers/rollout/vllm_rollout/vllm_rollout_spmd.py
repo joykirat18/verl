@@ -599,7 +599,7 @@ class vLLMRollout(BaseRollout):
                 difficulty_list = [res['difficulty'] for res in response]
             else:
                 original_uuid_list = [res['uuid'] for res in response]
-                if self.summary_mode == 'attention_weights':
+                if self.summary_mode == 'attention_weights' or self.summary_mode == 'compression_no_difficulty':
                     summary_outputs = self.summarize_attention_weights(summary_inputs)
                 elif self.summary_mode == 'confidence_scores':
                     summary_outputs = self.summarize_confidence_scores(summary_inputs)
@@ -703,7 +703,7 @@ class vLLMRollout(BaseRollout):
         response_position_ids = position_ids[..., -1:] + delta_position_id
         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
 
-        if self.summary_mode == 'None' or self.summary_mode == 'attention_weights' or self.summary_mode == 'early_exit_attention_weights' or self.summary_mode == 'early_exit' or self.summary_mode == 'confidence_scores':
+        if self.summary_mode == 'None' or self.summary_mode == 'attention_weights' or self.summary_mode == 'early_exit_attention_weights' or self.summary_mode == 'early_exit' or self.summary_mode == 'confidence_scores' or self.summary_mode == 'compression_no_difficulty':
             response_attention_mask = get_response_mask(
                 response_id=final_response, 
                 eos_token=eos_token_id, 
@@ -807,6 +807,8 @@ class vLLMRollout(BaseRollout):
         
 
     def get_difficulty_class(self, difficulty):
+        if self.summary_mode == 'compression_no_difficulty':
+            return "no_difficulty"
         if difficulty == None:
             return "unknown"
         if difficulty >= 0.8:
@@ -1035,41 +1037,64 @@ class vLLMRollout(BaseRollout):
             summary_outputs.append(new_reasoning_chain)
         return summary_outputs
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        retry=retry_if_exception_type((
+            requests.exceptions.RequestException, 
+            requests.exceptions.Timeout,
+            requests.exceptions.HTTPError,
+            ValueError
+        ))
+    )
+    def _make_api_request(self, payload: dict) -> str:
+        """Make API request with retry mechanism for individual calls."""
+        BASE_URL = "http://localhost:8008"
+        API_ENDPOINTS = {
+            "health": f"{BASE_URL}/health",
+            "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
+        }
+        
+        response = requests.post(API_ENDPOINTS["get_reduced_reasoning_chain"], json=payload)
+        response.raise_for_status()
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data['new_reasoning_chain']
+        else:
+            raise ValueError(f"Failed to get model output: {response.status_code}")
+
     def summarize_attention_weights(self, summary_inputs) -> List[str]:
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":
             summary_outputs = []
             for input in tqdm(summary_inputs):
                 text = input['think_str']
                 difficulty_category = input['difficulty_category']
+                print(f"Difficulty category: {difficulty_category}")
                 reduction_score = self.get_reduction_score(difficulty_category)
+                print(f"Reduction score: {reduction_score}")
                 
-                text = "<think>" + text + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
-                # API configuration
-                BASE_URL = "http://localhost:8008"
-                API_ENDPOINTS = {
-                    "health": f"{BASE_URL}/health",
-                    "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
-                }
+                text = "<think>" + text + "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.</think>"
+                
                 payload = {
                     "text": text,
                     "reduction_score": reduction_score
                 }
-                response = requests.post(API_ENDPOINTS["get_reduced_reasoning_chain"], json=payload)
-
-                if response.status_code == 200:
-                    data = response.json()
-
-                    new_reasoning_chain = data['new_reasoning_chain']
-                    if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
-                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                
+                try:
+                    new_reasoning_chain = self._make_api_request(payload)
+                    
+                    if "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence." in new_reasoning_chain:
+                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.", "")
                     # if '<think>' in new_reasoning_chain:
                     #     new_reasoning_chain = new_reasoning_chain.replace('<think>', '')
                     # if '</think>' in new_reasoning_chain:
                     #     new_reasoning_chain = new_reasoning_chain.replace('</think>', '')
 
                     summary_outputs.append(new_reasoning_chain)
-                else:
-                    raise ValueError(f"Failed to get model output: {response.status_code}")
+                except Exception as e:
+                    print(f"Error processing input: {e}")
+                    raise ValueError(f"Failed to get model output")
         elif self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" or self.model_path == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
             summary_outputs = []
             for input in tqdm(summary_inputs):
@@ -1077,33 +1102,27 @@ class vLLMRollout(BaseRollout):
                 difficulty_category = input['difficulty_category']
                 reduction_score = self.get_reduction_score(difficulty_category)
 
-                text = "<think>\n" + text + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
-                # API configuration
-                BASE_URL = "http://localhost:8005"
-                API_ENDPOINTS = {
-                    "health": f"{BASE_URL}/health",
-                    "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
-                }
+                text = "<think>\n" + text + "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.</think>"
+                
                 payload = {
                     "text": text,
                     "reduction_score": reduction_score
                 }
-                response = requests.post(API_ENDPOINTS["get_reduced_reasoning_chain"], json=payload)
-
-                if response.status_code == 200:
-                    data = response.json()
-
-                    new_reasoning_chain = data['new_reasoning_chain']
-                    if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
-                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                
+                try:
+                    new_reasoning_chain = self._make_api_request(payload)
+                    
+                    if "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence." in new_reasoning_chain:
+                        new_reasoning_chain = new_reasoning_chain.replace("Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.", "")
                     if '<think>\n' in new_reasoning_chain:
                         new_reasoning_chain = new_reasoning_chain.replace('<think>\n', '')
                     # if '</think>' in new_reasoning_chain:
                     #     new_reasoning_chain = new_reasoning_chain.replace('</think>', '')
 
                     summary_outputs.append(new_reasoning_chain)
-                else:
-                    raise ValueError(f"Failed to get model output: {response.status_code}")
+                except Exception as e:
+                    print(f"Error processing input: {e}")
+                    raise ValueError(f"Failed to get model output")
                 
         else:
             raise ValueError(f"Model path {self.model_path} not supported")
@@ -1128,9 +1147,9 @@ class vLLMRollout(BaseRollout):
                         summary_outputs.append(first_correct_answer_chain)
                 elif self.summary_mode == 'early_exit_attention_weights':
 
-                    text = "<think>" + remaining_answer_chain + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
+                    text = "<think>" + remaining_answer_chain + "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.</think>"
                     # API configuration
-                    BASE_URL = "http://localhost:8005"
+                    BASE_URL = "http://localhost:8008"
                     API_ENDPOINTS = {
                         "health": f"{BASE_URL}/health",
                         "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
@@ -1145,8 +1164,8 @@ class vLLMRollout(BaseRollout):
                         data = response.json()
 
                         new_reasoning_chain = data['new_reasoning_chain']
-                        if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
-                            new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                        if "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence." in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace("Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.", "")
                         if '<think>' in new_reasoning_chain:
                             new_reasoning_chain = new_reasoning_chain.replace('<think>', '')
                         if '</think>' in new_reasoning_chain:
@@ -1174,9 +1193,9 @@ class vLLMRollout(BaseRollout):
                     else:
                         summary_outputs.append(first_correct_answer_chain)
                 elif self.summary_mode == 'early_exit_attention_weights':
-                    text = "<think>\n" + remaining_answer_chain + "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.</think>"
+                    text = "<think>\n" + remaining_answer_chain + "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.</think>"
                     
-                    BASE_URL = "http://localhost:8005"
+                    BASE_URL = "http://localhost:8008"
                     API_ENDPOINTS = {
                         "health": f"{BASE_URL}/health",
                         "get_reduced_reasoning_chain": f"{BASE_URL}/get_reduced_reasoning_chain",
@@ -1192,8 +1211,8 @@ class vLLMRollout(BaseRollout):
                         data = response.json()
 
                         new_reasoning_chain = data['new_reasoning_chain']
-                        if "Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem." in new_reasoning_chain:
-                            new_reasoning_chain = new_reasoning_chain.replace("Time is up. I should stop thinking and now write a summary containing all key steps required to solve the problem.", "")
+                        if "Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence." in new_reasoning_chain:
+                            new_reasoning_chain = new_reasoning_chain.replace("Time is up. Given the time I’ve spent and the approaches I’ve tried, I should stop thinking and now write summarization in one sentence.", "")
                         if '<think>\n' in new_reasoning_chain:
                             new_reasoning_chain = new_reasoning_chain.replace('<think>\n', '')
                         if '</think>' in new_reasoning_chain:
@@ -1242,12 +1261,14 @@ class vLLMRollout(BaseRollout):
         return first_half, remaining_half
 
     def get_reduction_score(self, difficulty_category: str) -> float:
-        if difficulty_category == 'easy':
+        if difficulty_category == 'no_difficulty':
             return 0.6
+        if difficulty_category == 'easy':
+            return 0.5
         elif difficulty_category == 'medium':
             return 0.4
         elif difficulty_category == 'hard':
-            return 0.2
+            return 0.3
         
     def summarize_think(self, summary_inputs) -> List[str]:
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":

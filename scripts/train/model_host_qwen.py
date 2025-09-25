@@ -138,7 +138,7 @@ async def get_reduced_reasoning_chain(request: ModelInput):
         # Move to device - get the device from the model
         device = next(model.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
-        target_layers = [i for i in range(model.config.num_hidden_layers)]
+        target_layers = [i for i in range(model.config.num_hidden_layers // 2)]
 
         attn_store = {}
         def make_hook(layer_id):

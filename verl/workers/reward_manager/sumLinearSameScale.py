@@ -80,28 +80,10 @@ class SumLinearSameScaleRewardManager:
 
         
     def get_difficulty_class(self, difficulty):
-        if difficulty == None:
-            return "unknown"
-        if difficulty >= 0.8:
-            difficulty_category = 'easy'
-        elif difficulty >= 0.3:
-            difficulty_category = 'medium'
-        elif difficulty >= 0:
-            difficulty_category = 'hard'
-        else:
-            difficulty_category = 'unknown'
-        return difficulty_category
+        return "no_difficulty"
 
     def get_difficulty_scale(self, difficulty_category):
-        if difficulty_category == 'easy':
-            difficulty_scale = 1.0
-        elif difficulty_category == 'medium':
-            difficulty_scale = 1.0
-        elif difficulty_category == 'hard':
-            difficulty_scale = 1.0
-        else:
-            difficulty_scale = 0
-        return difficulty_scale
+        return 1.0
 
 
     def get_matching_length_list(self, data, uuid):
@@ -345,6 +327,7 @@ class SumLinearSameScaleRewardManager:
                     'difficulty': scores['difficulty'],
                     'reason': reason,
                     'final_reward': reward,
+                    'uuid': scores['uuid'],
                 }
                 save_file.write(json.dumps(save_json_line, ensure_ascii=False) + '\n')
 
