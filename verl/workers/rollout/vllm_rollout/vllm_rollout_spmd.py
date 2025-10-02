@@ -1264,11 +1264,11 @@ class vLLMRollout(BaseRollout):
         if difficulty_category == 'no_difficulty':
             return 0.6
         if difficulty_category == 'easy':
-            return 0.5
+            return 0.75
         elif difficulty_category == 'medium':
-            return 0.4
+            return 0.5
         elif difficulty_category == 'hard':
-            return 0.3
+            return 0.25
         
     def summarize_think(self, summary_inputs) -> List[str]:
         if self.model_path == "Qwen/Qwen3-4B" or self.model_path == "Qwen/Qwen3-8B":

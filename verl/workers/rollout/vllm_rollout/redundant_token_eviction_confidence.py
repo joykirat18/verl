@@ -102,6 +102,7 @@ def redundant_token_eviction(
     # Step 7: Segment reasoning chain into steps
     reasoning_steps, reasoning_token_positions = segment_reasoning_chain(reasoning_chain, tokenizer)
 
+
     
     # Step 8-10: Calculate step importance scores
     step_importance = calculate_step_importance(reasoning_steps, reasoning_token_positions, confidence_tensor, input_ids)

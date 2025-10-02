@@ -6,10 +6,10 @@ set -x
 export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
 export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
-export HUGGINGFACE_TOKEN='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'
-export HF_TOKEN='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'
-export CUDA_VISIBLE_DEVICES=6,7
-EXPERIMENT_NAME=qwen4b_dapo_math_15k_context_linear_reward_with_summary_attention_v1
+export HUGGINGFACE_TOKEN='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'
+export HF_TOKEN='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'
+export CUDA_VISIBLE_DEVICES=1,2
+EXPERIMENT_NAME=qwen4b_dapo_math_15k_context_linear_reward_with_summary_attention_no_scale
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=verlCheckpoint/Summary/$EXPERIMENT_NAME
 if [ "$WANDB_API_KEY" != "None" ]; then
@@ -72,7 +72,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.default_local_dir=${SAVE_PATH} \
     trainer.rollout_save_path=${ROLLOUT_SAVE_PATH} \
-    trainer.save_freq=10 \
+    trainer.save_freq=20 \
     trainer.test_freq=20 \
     trainer.val_before_train=False \
     trainer.total_epochs=2 $@

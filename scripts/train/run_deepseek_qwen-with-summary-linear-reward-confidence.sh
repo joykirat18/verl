@@ -6,9 +6,9 @@ set -x
 export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
 export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
-export HUGGINGFACE_TOKEN='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'
-export HF_TOKEN='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'
-export CUDA_VISIBLE_DEVICES=4,5
+export HUGGINGFACE_TOKEN='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'
+export HF_TOKEN='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'
+export CUDA_VISIBLE_DEVICES=0,1
 EXPERIMENT_NAME=deepseek_qwen_7b_dapo_math_10k_context_linear_reward_with_summary_confidence
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=verlCheckpoint/Summary/$EXPERIMENT_NAME
