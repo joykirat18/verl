@@ -174,6 +174,8 @@ class SGLangRollout(BaseRollout):
             model_path=actor_module,
             dtype=config.dtype,
             mem_fraction_static=config.gpu_memory_utilization,
+            enable_soft_thinking=config.enable_soft_thinking,
+            add_noise_gumbel_softmax=config.add_noise_gumbel_softmax,
             device_mesh_cpu=device_mesh_cpu["tp"],
             enable_memory_saver=True,
             base_gpu_id=0,
@@ -182,6 +184,9 @@ class SGLangRollout(BaseRollout):
             dist_init_addr=dist_init_addr,
             nnodes=nnodes,
             trust_remote_code=trust_remote_code,
+            disable_cuda_graph=True,
+            disable_overlap_schedule=True,
+            max_topk=config.max_topk,
             # NOTE(linjunrong): add rank to prevent SGLang generate same port inside PortArgs.init_new
             # when random.seed is being set during training
             port=30000 + rank,
@@ -202,7 +207,15 @@ class SGLangRollout(BaseRollout):
             max_new_tokens=config.response_length,
             presence_penalty=0.0,
             frequency_penalty=0.0,
-            repetition_penalty=1.0,
+            repetition_penalty=config.repetition_penalty,
+            min_p=config.min_p,
+            after_thinking_temperature=config.after_thinking_temperature,
+            after_thinking_top_p=config.after_thinking_top_p,
+            after_thinking_top_k=config.after_thinking_top_k,
+            early_stopping_entropy_threshold=config.early_stopping_entropy_threshold,
+            early_stopping_length_threshold=config.early_stopping_length_threshold,
+            gumbel_softmax_temperature=config.gumbel_softmax_temperature,
+            think_end_str="</think>",
         )
         # supporting adding any sampling params from the config file
         for k in config.keys():
@@ -297,11 +310,22 @@ class SGLangRollout(BaseRollout):
                 top_p=self.config.val_kwargs.top_p,
                 temperature=self.config.val_kwargs.temperature,
                 n=1,  # if validate, already repeat in ray_trainer
+                min_p=self.config.val_kwargs.min_p,
+                repetition_penalty=self.config.val_kwargs.repetition_penalty,
+                after_thinking_temperature=self.config.val_kwargs.after_thinking_temperature,
+                after_thinking_top_p=self.config.val_kwargs.after_thinking_top_p,
+                after_thinking_top_k=self.config.val_kwargs.after_thinking_top_k,
+                early_stopping_entropy_threshold=self.config.val_kwargs.early_stopping_entropy_threshold,
+                early_stopping_length_threshold=self.config.val_kwargs.early_stopping_length_threshold,
+                think_end_str=self.config.val_kwargs.think_end_str,
+                gumbel_softmax_temperature=self.config.val_kwargs.gumbel_softmax_temperature,
             )
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
+            print(f"Generation started")
             print(f"{self.sampling_params=}")
+            # breakpoint()
             output = self.inference_engine.generate(
                 prompt=None,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
@@ -309,6 +333,7 @@ class SGLangRollout(BaseRollout):
                 input_ids=idx_list,
                 image_data=image_list,
             )
+            print(f"Generation completed")
 
             out = _post_process_outputs(self.tokenizer, output)
 

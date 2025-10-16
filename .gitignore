@@ -123,3 +123,7 @@ ENV/
 logs
 log
 outputs
+
+venv/
+
+scripts/train/checkpoints/

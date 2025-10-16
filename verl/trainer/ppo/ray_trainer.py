@@ -621,7 +621,7 @@ class RayPPOTrainer:
             test_batch = test_batch.union(test_output_gen_batch)
 
             # evaluate using reward_function
-            result = self.val_reward_fn(test_batch, return_dict=True)
+            result = self.val_reward_fn(test_batch, return_dict=True, save_path=os.path.join(f"{self.config.trainer.default_local_dir}/rollouts", f"val_{self.global_steps}.jsonl"))
             reward_tensor = result["reward_tensor"]
             scores = reward_tensor.sum(-1).cpu().tolist()
             sample_scores.extend(scores)
@@ -920,7 +920,7 @@ class RayPPOTrainer:
                             gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
 
                             batch = batch.union(gen_baseline_output)
-                            reward_baseline_tensor = self.reward_fn(batch)
+                            reward_baseline_tensor = self.reward_fn(batch, save_path=os.path.join(f"{self.config.trainer.default_local_dir}/rollouts", f"train_{self.global_steps}.jsonl"))
                             reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)
 
                             batch.pop(batch_keys=list(gen_baseline_output.batch.keys()))
@@ -953,7 +953,7 @@ class RayPPOTrainer:
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn, save_path=os.path.join(f"{self.config.trainer.default_local_dir}/rollouts", f"train_{self.global_steps}.jsonl"))
 
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):

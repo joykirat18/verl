@@ -20,6 +20,16 @@ rollout:
   top_p: 0.7
   prompt_length: 1536
   response_length: 512
+  min_p: 0.0
+  repetition_penalty: 1.0
+  after_thinking_temperature: 1.0
+  after_thinking_top_p: 1.0
+  after_thinking_top_k: -1
+  early_stopping_entropy_threshold: 0.0
+  early_stopping_length_threshold: 256
+  enable_soft_thinking: False
+  add_noise_gumbel_softmax: False
+  gumbel_softmax_temperature: 1.0
   # for vllm rollout
   dtype: bfloat16 # should align with FSDP
   gpu_memory_utilization: 0.5
