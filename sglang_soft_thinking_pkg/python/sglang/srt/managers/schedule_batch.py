@@ -594,8 +594,10 @@ class Req:
             # NOTE: 输入的部分暂时不进行保留。 shape: [output_len, K]
             self.output_topk_prob_list = []
             self.output_topk_idx_list = []
+            self.output_soft_mask_list = []
             self.output_topk_prob_list_tmp = []
             self.output_topk_idx_list_tmp = []
+            self.output_soft_mask_list_tmp = []
             # track consecutive low entropy steps for early stopping
             self.low_entropy_steps = 0
         # ==========
@@ -777,6 +779,10 @@ class Req:
         if not self.finished():
             self.output_topk_prob_list_tmp.append(self.topk_prob)
             self.output_topk_idx_list_tmp.append(self.topk_idx)
+            # Record whether this token was generated with soft thinking mode
+            # True = soft token (use PDF), False = discrete token (use log_prob)
+            self.output_soft_mask_list_tmp.append(self.sampling_params.soft_thinking_mode)
+
 
     def get_output_topk_prob_list(self):
         if self.output_topk_prob_list_tmp:
@@ -789,6 +795,12 @@ class Req:
             self.output_topk_idx_list.extend(torch.stack(self.output_topk_idx_list_tmp, dim=0).cpu().tolist())
             self.output_topk_idx_list_tmp = []
         return self.output_topk_idx_list
+    
+    def get_output_soft_mask_list(self):
+        if self.output_soft_mask_list_tmp:
+            self.output_soft_mask_list.extend(self.output_soft_mask_list_tmp)
+            self.output_soft_mask_list_tmp = []
+        return self.output_soft_mask_list
     # ==========
     # end of soft thinking
     # ==========

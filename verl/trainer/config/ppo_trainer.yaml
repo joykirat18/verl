@@ -52,6 +52,9 @@ actor_rollout_ref:
     ppo_epochs: 1
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size
+    use_pdf: False
+    max_topk: 10
+    gumbel_softmax_temperature: 1.0
     checkpoint:
       contents: ['model', 'optimizer', 'extra']  # with 'hf_model' you can save whole model as hf format, now only use sharded model checkpoint to save space
     optim:
@@ -85,6 +88,7 @@ actor_rollout_ref:
     log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
     log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
     ulysses_sequence_parallel_size: ${actor_rollout_ref.actor.ulysses_sequence_parallel_size} # sp size
+    use_pdf: ${actor_rollout_ref.actor.use_pdf}
   rollout:
     name: vllm
     mode: sync # sync: LLM, async: AsyncLLM

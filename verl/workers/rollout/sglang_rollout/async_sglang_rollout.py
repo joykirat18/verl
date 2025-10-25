@@ -45,7 +45,7 @@ from verl.tools.schemas import OpenAIFunctionCallSchema, OpenAIFunctionParsedSch
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.net_utils import is_ipv6
-from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length
+from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length, pad_sequence_to_length_dim
 from verl.workers.rollout.base import BaseRollout
 from verl.workers.rollout.schemas import (
     AsyncRolloutRequest,
@@ -380,10 +380,24 @@ class AsyncSGLangRollout(BaseRollout):
 
             response = out[0].to(idx.device)
             # log_probs = out[1].to(idx.device)
+            topk_probs = out[2].to(idx.device) if out[2] is not None else None
+            topk_indices = out[3].to(idx.device) if out[3] is not None else None
+            soft_mask = out[4].to(idx.device) if out[4] is not None else None
 
             if response.shape[1] < self.config.response_length:
                 response = pad_sequence_to_length(response, self.config.response_length, self.pad_token_id)
                 # log_probs = pad_sequence_to_length(log_probs, self.config.response_length, self.pad_token_id)
+            if soft_mask is not None and soft_mask.shape[1] < self.config.response_length:
+                # Pad soft mask with False (padded positions are NOT soft tokens)
+                soft_mask = pad_sequence_to_length(soft_mask, self.config.response_length, False)
+            
+            # Pad topk data to match response_length
+            # Note: Padding is needed because when soft tokens exist, we use PDF for ALL positions
+            # For discrete positions, topk data comes from SGLang (all probability on the sampled token)
+            if topk_probs is not None and topk_probs.shape[1] < self.config.response_length:
+                # Padded positions are masked out in PDF computation using pad_token_id from response tensor
+                topk_probs = pad_sequence_to_length_dim(topk_probs, self.config.response_length, 0.0, dim=1)
+                topk_indices = pad_sequence_to_length_dim(topk_indices, self.config.response_length, 0, dim=1)
 
             # utilize current sampling params
             if self.sampling_params.get("n", 1) > 1 and do_sample:
@@ -391,6 +405,12 @@ class AsyncSGLangRollout(BaseRollout):
                 attention_mask = attention_mask.repeat_interleave(self.sampling_params["n"], dim=0)
                 position_ids = position_ids.repeat_interleave(self.sampling_params["n"], dim=0)
                 batch_size = batch_size * self.sampling_params["n"]
+                if topk_probs is not None:
+                    topk_probs = topk_probs.repeat_interleave(self.sampling_params["n"], dim=0)
+                if topk_indices is not None:
+                    topk_indices = topk_indices.repeat_interleave(self.sampling_params["n"], dim=0)
+                if soft_mask is not None:
+                    soft_mask = soft_mask.repeat_interleave(self.sampling_params["n"], dim=0)
                 if "multi_modal_inputs" in non_tensor_batch.keys():
                     non_tensor_batch["multi_modal_inputs"] = np.repeat(non_tensor_batch["multi_modal_inputs"], self.sampling_params["n"], axis=0)
             seq = torch.cat([idx, response], dim=-1)
@@ -409,15 +429,25 @@ class AsyncSGLangRollout(BaseRollout):
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
+        batch_dict = {
+            "prompts": idx,
+            "responses": response,
+            "input_ids": seq,  # here input_ids become the whole sentences
+            # 'old_log_probs': log_probs, # we will recompute old log prob with actor
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+        }
+        
+        # Add soft token data if available
+        if topk_probs is not None:
+            batch_dict["soft_token_probs"] = topk_probs
+        if topk_indices is not None:
+            batch_dict["soft_token_indices"] = topk_indices
+        if soft_mask is not None:
+            batch_dict["soft_token_mask"] = soft_mask
+        
         batch = TensorDict(
-            {
-                "prompts": idx,
-                "responses": response,
-                "input_ids": seq,  # here input_ids become the whole sentences
-                # 'old_log_probs': log_probs, # we will recompute old log prob with actor
-                "attention_mask": attention_mask,
-                "position_ids": position_ids,
-            },
+            batch_dict,
             batch_size=batch_size,
         )
 
@@ -425,7 +455,9 @@ class AsyncSGLangRollout(BaseRollout):
         if self.config.free_cache_engine and self._engine is not None:
             self._engine.tokenizer_manager.flush_cache()
 
-        return DataProto(batch=batch)
+        # Add pad_token_id to meta_info for actor to use in PDF computation
+        meta_info = {"pad_token_id": self.pad_token_id}
+        return DataProto(batch=batch, meta_info=meta_info)
 
     async def _async_rollout_a_request(self, req: AsyncRolloutRequest, do_sample: bool = True, is_validate: bool = False, **kwargs) -> AsyncRolloutRequest:
         assert self._tp_rank == 0, "only the master process can call this function"

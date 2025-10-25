@@ -234,6 +234,7 @@ class DetokenizerManager:
             # ==========
             output_topk_probs_list=recv_obj.output_topk_probs_list,
             output_topk_indices_list=recv_obj.output_topk_indices_list,
+            output_soft_mask_list=recv_obj.output_soft_mask_list,
             # ==========
             # end of soft thinking
             # ==========

@@ -30,6 +30,7 @@ rollout:
   enable_soft_thinking: False
   add_noise_gumbel_softmax: False
   gumbel_softmax_temperature: 1.0
+  use_pdf: False
   # for vllm rollout
   dtype: bfloat16 # should align with FSDP
   gpu_memory_utilization: 0.5
@@ -51,6 +52,7 @@ rollout:
   enable_chunked_prefill: True
   n: 1
 actor:
+  use_pdf: False
   strategy: fsdp  # This is for backward-compatibility
   ulysses_sequence_parallel_size: 1 # sp size
   fsdp_config:

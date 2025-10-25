@@ -16,24 +16,31 @@
 from math_verify.errors import TimeoutException
 from math_verify.metric import math_metric
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+import re
 # except ImportError:
     # print("To use Math-Verify, please install it first by running `pip install math-verify`.")
 
+def get_format_reward(predict_str: str) -> float:
+    pattern = re.compile(r"<think>.*</think>.*\\boxed\{.*\}.*", re.DOTALL)
+    match_result = re.fullmatch(pattern, predict_str)
+    return 1.0 if match_result else 0.0
 
-def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0) -> bool:
+def get_acc_reward(predict_str: str, ground_truth: str) -> float:
+
     verify_func = math_metric(
         gold_extraction_target=(LatexExtractionConfig(),),
         pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
     )
+
     ret_score = 0.0
-
-    # Wrap the ground truth in \boxed{} format for verification
     ground_truth_boxed = "\\boxed{" + ground_truth + "}"
-    try:
-        ret_score, _ = verify_func([ground_truth_boxed], [model_output])
-    except Exception:
-        pass
-    except TimeoutException:
-        ret_score = timeout_score
 
+    ret_score, _ = verify_func([ground_truth_boxed], [predict_str])
     return ret_score
+
+
+def compute_score(model_output: str, ground_truth: str) -> float:
+
+    format_reward = get_format_reward(model_output)
+    acc_reward = get_acc_reward(model_output, ground_truth)
+    return 0.9 * acc_reward + 0.1 * format_reward

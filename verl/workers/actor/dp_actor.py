@@ -34,7 +34,7 @@ from verl.utils.debug import GPUMemoryLogger
 from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
 from verl.utils.py_functional import append_to_dict
 from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
-from verl.utils.torch_functional import logprobs_from_logits
+from verl.utils.torch_functional import logprobs_from_logits, log_pdf_from_logits_topk, log_pdf_and_logprobs_mixed
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
 
@@ -54,18 +54,49 @@ class DataParallelPPOActor(BasePPOActor):
         print(f"Actor use_remove_padding={self.use_remove_padding}")
         self.ulysses_sequence_parallel_size = self.config.ulysses_sequence_parallel_size
         self.use_ulysses_sp = self.ulysses_sequence_parallel_size > 1
+        self.use_pdf = self.config.get("use_pdf", False)  # Flag to use PDF instead of log_prob
+        self.max_topk = self.config.get("max_topk", 10)
+        self.gumbel_softmax_temperature = self.config.get("gumbel_softmax_temperature", 1.0)
+        print(f"Actor use_pdf={self.use_pdf}, max_topk={self.max_topk}, gumbel_softmax_temperature={self.gumbel_softmax_temperature}")
 
         self.compute_entropy_from_logits = (
             torch.compile(verl_F.entropy_from_logits, dynamic=True)
             if self.config.get("use_torch_compile", True)  #  use torch compile by default
             else verl_F.entropy_from_logits
         )
+    
+    def _create_soft_token_mask(self, topk_probs: torch.Tensor, topk_indices: torch.Tensor) -> torch.Tensor:
+        """
+        Create a mask indicating which positions have valid soft tokens.
+        
+        Positions with soft tokens will have non-padding values.
+        Positions without soft tokens (discrete sampling) will have padding values (prob=-1, indices=-1).
+        
+        Args:
+            topk_probs: Tensor of shape [batch, seq_len, k] 
+            topk_indices: Tensor of shape [batch, seq_len, k]
+            
+        Returns:
+            mask: Boolean tensor of shape [batch, seq_len]
+                  True = soft token position (use PDF)
+                  False = discrete token position (use log_prob)
+        """
+        # Check if the first topk value is valid (not -1)
+        # Padded positions have prob=-1 and index=-1
+        first_prob = topk_probs[:, :, 0]  # [batch, seq_len]
+        first_idx = topk_indices[:, :, 0]  # [batch, seq_len]
+        
+        # Soft token positions should have valid probability values (prob >= 0 and index >= 0)
+        # Padded/discrete positions have prob=-1 and index=-1
+        is_valid = (first_prob >= 0) & (first_idx >= 0)
+        
+        return is_valid
 
-    def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _forward_micro_batch(self, micro_batch, temperature, pad_token_id=None, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
             entropy: # (bs, response_len)
-            log_probs: # (bs, response_len)
+            log_probs: # (bs, response_len) or log_pdfs if use_pdf is True
         """
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
@@ -73,6 +104,10 @@ class DataParallelPPOActor(BasePPOActor):
             for key in micro_batch["multi_modal_inputs"][0].keys():
                 multi_modal_inputs[key] = torch.cat([inputs[key] for inputs in micro_batch["multi_modal_inputs"]], dim=0)
 
+        # Check if soft token data is available for PDF computation
+        has_soft_tokens = "soft_token_probs" in micro_batch and "soft_token_indices" in micro_batch
+        use_pdf_computation = self.use_pdf and has_soft_tokens
+        
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             input_ids = micro_batch["input_ids"]
             batch_size, seqlen = input_ids.shape
@@ -81,7 +116,7 @@ class DataParallelPPOActor(BasePPOActor):
             entropy = None
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
-
+            
             if self.use_remove_padding:
                 input_ids_rmpad, indices, *_ = unpad_input(input_ids.unsqueeze(-1), attention_mask)  # input_ids_rmpad (total_nnz, ...)
                 input_ids_rmpad = input_ids_rmpad.transpose(0, 1)  # (1, total_nnz)
@@ -118,7 +153,15 @@ class DataParallelPPOActor(BasePPOActor):
                 inplace_backward = True
                 if calculate_entropy:
                     inplace_backward = False
-                log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=inplace_backward)
+                
+                # Compute log_probs or log_pdf based on configuration
+                if use_pdf_computation:
+                    # breakpoint()
+                    # We need to reconstruct soft tokens for the response part after padding back
+                    # For now, compute log_probs here and will replace with PDF after padding back
+                    log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=inplace_backward)
+                else:
+                    log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=inplace_backward)
 
                 # compute entropy
                 if calculate_entropy:
@@ -151,7 +194,42 @@ class DataParallelPPOActor(BasePPOActor):
                 logits = output.logits
                 logits.div_(temperature)
                 logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
-                log_probs = logprobs_from_logits(logits, micro_batch["responses"])
+                
+                # Compute log_probs: MIXED approach (PDF for soft tokens, log_probs for discrete tokens)
+                if use_pdf_computation:
+                    soft_token_probs = micro_batch["soft_token_probs"]  # (bsz, response_length, topk)
+                    soft_token_indices = micro_batch["soft_token_indices"]  # (bsz, response_length, topk)
+                    
+                    # Get soft token mask - PREFER using the actual mask from SGLang if available
+                    # This is more accurate than inferring from topk values
+                    if "soft_token_mask" in micro_batch:
+                        # Use the actual soft_thinking_modes mask from SGLang (PREFERRED!)
+                        # This tells us exactly which tokens were generated with soft thinking
+                        soft_token_mask = micro_batch["soft_token_mask"]  # (bsz, response_length)
+                        print(f"Using explicit soft_token_mask from SGLang: {soft_token_mask.sum()}/{soft_token_mask.numel()} soft tokens")
+                    else:
+                        # FALLBACK: Infer mask from topk_probs (less accurate)
+                        # This happens when SGLang doesn't export the soft_thinking_modes mask
+                        soft_token_mask = self._create_soft_token_mask(soft_token_probs, soft_token_indices)
+                        print(f"WARNING: Inferring soft_token_mask from topk values. Consider exporting soft_thinking_modes from SGLang for accuracy.")
+                        print(f"Inferred mask: {soft_token_mask.sum()}/{soft_token_mask.numel()} soft tokens")
+                    
+                    # Use MIXED computation:
+                    # - PDF for positions where soft_token_mask is True (soft thinking tokens)
+                    # - Regular log_probs for positions where soft_token_mask is False (discrete tokens)
+                    log_probs = log_pdf_and_logprobs_mixed(
+                        logits=logits,                        # (bsz, response_length, vocab_size)
+                        discrete_labels=micro_batch["responses"],  # (bsz, response_length)
+                        topk_probs=soft_token_probs,          # (bsz, response_length, k)
+                        topk_indices=soft_token_indices,      # (bsz, response_length, k)
+                        soft_token_mask=soft_token_mask,      # (bsz, response_length)
+                        temperature=self.gumbel_softmax_temperature,
+                        pad_token_id=pad_token_id            # (int or None)
+                    )  # (bsz, response_length)
+                else:
+                    # No PDF computation, use regular log_probs for all tokens
+                    log_probs = logprobs_from_logits(logits, micro_batch["responses"])
+                
                 if calculate_entropy:
                     entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
 
@@ -200,8 +278,15 @@ class DataParallelPPOActor(BasePPOActor):
         micro_batch_size = data.meta_info["micro_batch_size"]
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
+        pad_token_id = data.meta_info.get("pad_token_id", None)  # Get pad_token_id from rollout if available
 
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
+        # Add soft token keys if they exist and PDF is enabled
+        if self.use_pdf and "soft_token_probs" in data.batch.keys():
+            select_keys.extend(["soft_token_probs", "soft_token_indices"])
+            # Also add mask if available (from SGLang)
+            if "soft_token_mask" in data.batch.keys():
+                select_keys.append("soft_token_mask")
         batch = data.select(batch_keys=select_keys).batch
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
 
@@ -222,7 +307,7 @@ class DataParallelPPOActor(BasePPOActor):
             if isinstance(micro_batch, DataProto):
                 micro_batch = {**micro_batch.batch, **micro_batch.non_tensor_batch}
             with torch.no_grad():
-                entropy, log_probs = self._forward_micro_batch(micro_batch, temperature=temperature, calculate_entropy=calculate_entropy)
+                entropy, log_probs = self._forward_micro_batch(micro_batch, temperature=temperature, pad_token_id=pad_token_id, calculate_entropy=calculate_entropy)
             log_probs_lst.append(log_probs)
             if calculate_entropy:
                 entropy_lst.append(entropy)
@@ -252,6 +337,12 @@ class DataParallelPPOActor(BasePPOActor):
             select_keys.append("loss_mask")
         if self.config.use_kl_loss:
             select_keys.append("ref_log_prob")
+        # Add soft token keys if they exist and PDF is enabled
+        if self.use_pdf and "soft_token_probs" in data.batch.keys():
+            select_keys.extend(["soft_token_probs", "soft_token_indices"])
+            # Also add mask if available (from SGLang)
+            if "soft_token_mask" in data.batch.keys():
+                select_keys.append("soft_token_mask")
         batch = data.select(batch_keys=select_keys).batch
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
 

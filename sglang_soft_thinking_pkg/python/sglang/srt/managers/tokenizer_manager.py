@@ -1064,6 +1064,9 @@ class TokenizerManager:
                 )
                 meta_info["output_topk_idx_list"] = (
                     recv_obj.output_topk_indices_list[i]
+                )
+                meta_info["output_soft_thinking_modes_list"] = (
+                    recv_obj.output_soft_mask_list[i]
                 ) 
 
             if not isinstance(recv_obj, BatchEmbeddingOut):

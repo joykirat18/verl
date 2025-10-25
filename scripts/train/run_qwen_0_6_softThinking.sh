@@ -3,8 +3,8 @@ set -x
 export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
 export RAY_TMPDIR="/nas-hdd/joykirat/tmp_ray"
-export HUGGINGFACE_TOKEN='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'
-export HF_TOKEN='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'
+export HUGGINGFACE_TOKEN='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'
+export HF_TOKEN='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'
 
 export CUDA_VISIBLE_DEVICES=4,5
 EXPERIMENT_NAME=qwen06b_math_10k_softThinking
@@ -25,11 +25,11 @@ MICRO_BATCH_SIZE=4
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
-    data.train_files=/nas-ssd2/joykirat/code/latent-reasoning-project/verl/scripts/data/dapo-17k/train.parquet \
-    data.val_files=/nas-ssd2/joykirat/code/latent-reasoning-project/verl/scripts/data/aime_gpqa_test_dataset/test.parquet \
+    data.train_files=/nas-ssd2/joykirat/code/latent-reasoning-project/verl/scripts/data/bigMath/train.parquet \
+    data.val_files=/nas-ssd2/joykirat/code/latent-reasoning-project/verl/scripts/data/math-500/test.parquet \
     data.train_batch_size=$BATCH_SIZE \
     data.max_prompt_length=1024 \
-    data.max_response_length=8000 \
+    data.max_response_length=10000 \
     data.shuffle=False \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
@@ -61,24 +61,24 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.after_thinking_top_k=-1 \
     actor_rollout_ref.rollout.early_stopping_entropy_threshold=0.01 \
     actor_rollout_ref.rollout.early_stopping_length_threshold=256 \
-    actor_rollout_ref.rollout.max_topk=30 \
+    actor_rollout_ref.rollout.max_topk=10 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.7 \
-    actor_rollout_ref.rollout.val_kwargs.top_p=1.0 \
+    actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
+    actor_rollout_ref.rollout.val_kwargs.top_k=30 \
     actor_rollout_ref.rollout.val_kwargs.n=1 \
     actor_rollout_ref.rollout.val_kwargs.min_p=0.001 \
     actor_rollout_ref.rollout.val_kwargs.repetition_penalty=1.0 \
     actor_rollout_ref.rollout.val_kwargs.after_thinking_temperature=0.7 \
-    actor_rollout_ref.rollout.val_kwargs.after_thinking_top_p=1.0 \
-    actor_rollout_ref.rollout.val_kwargs.after_thinking_top_k=-1 \
+    actor_rollout_ref.rollout.val_kwargs.after_thinking_top_p=0.95 \
+    actor_rollout_ref.rollout.val_kwargs.after_thinking_top_k=30 \
     actor_rollout_ref.rollout.val_kwargs.early_stopping_entropy_threshold=0.01 \
     actor_rollout_ref.rollout.val_kwargs.early_stopping_length_threshold=256 \
-    actor_rollout_ref.rollout.val_kwargs.max_topk=30 \
+    actor_rollout_ref.rollout.val_kwargs.max_topk=10 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.enable_soft_thinking=True \
     actor_rollout_ref.rollout.add_noise_gumbel_softmax=False \
     actor_rollout_ref.rollout.n=8 \
-    algorithm.kl_ctrl.kl_coef=0.001 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=$MICRO_BATCH_SIZE \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     trainer.rollout_data_dir=${SAVE_PATH}/train_rollout \

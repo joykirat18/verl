@@ -17,70 +17,60 @@ Preprocess the MATH-lighteval dataset to parquet format
 
 import argparse
 import os
-import uuid
-
 
 import datasets
 
 from verl.utils.hdfs_io import copy, makedirs
+from verl.utils.reward_score.math import last_boxed_only_string, remove_boxed
+
+
+def extract_solution(solution_str):
+    return remove_boxed(last_boxed_only_string(solution_str))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default="dapo-17k")
+    parser.add_argument("--local_dir", default="math-500")
     parser.add_argument("--hdfs_dir", default=None)
 
     args = parser.parse_args()
 
     # 'lighteval/MATH' is no longer available on huggingface.
     # Use mirror repo: DigitalLearningGmbH/MATH-lighteval
-    data_source = "BytedTsinghua-SIA/DAPO-Math-17k"
+    data_source = "HuggingFaceH4/MATH-500"
     print(f"Loading the {data_source} dataset from huggingface...", flush=True)
     dataset = datasets.load_dataset(data_source, trust_remote_code=True)
 
-    all_dataset = dataset['train']
-    
+    test_dataset = dataset["test"]
 
-    instruction_following = " Let's think step by step and output the final answer within \\boxed{}."
+    instruction_following = "Let's think step by step and output the final answer within \\boxed{}."
 
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
         def process_fn(example, idx):
-            prompt = example.pop("prompt")
-            reward_model = example.pop("reward_model")
+            question = example.pop("problem")
 
-            prompt[0]['content'] = prompt[0]['content'].replace('Solve the following math problem step by step. The last line of your response should be of the form Answer: $Answer (without quotes) where $Answer is the answer to the problem.\n\n', '')
-            prompt[0]['content'] = prompt[0]['content'].replace('\n\nRemember to put your answer on its own line after \"Answer:\".', instruction_following)
+            question = question + " " + instruction_following
 
+            answer = example.pop("answer")
             data = {
-                "data_source": 'DAPO-Math-17k',
-                "prompt": prompt,
+                "data_source": data_source,
+                "prompt": [{"role": "user", "content": question}],
                 "ability": "math",
-                "reward_model": reward_model,
+                "reward_model": {"style": "rule", "ground_truth": answer},
                 "extra_info": {"split": split, "index": idx},
-                "uuid": str(uuid.uuid4()),
             }
             return data
 
         return process_fn
 
-
-    train_dataset = all_dataset.select(range(20000))
-    ## test dataset of 250 samples
-    test_dataset = all_dataset.select(range(20000, 20250))
-
-
-
-    train_dataset = train_dataset.map(function=make_map_fn("train"), with_indices=True)
     test_dataset = test_dataset.map(function=make_map_fn("test"), with_indices=True)
-    # breakpoint()
-
 
     local_dir = args.local_dir
     hdfs_dir = args.hdfs_dir
 
-    train_dataset.to_parquet(os.path.join(local_dir, "train.parquet"))
     test_dataset.to_parquet(os.path.join(local_dir, "test.parquet"))
+
     if hdfs_dir is not None:
         makedirs(hdfs_dir)
 

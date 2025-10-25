@@ -607,6 +607,7 @@ class BatchTokenIDOut:
     # Soft thinking
     output_topk_probs_list: List[List[List[float]]]
     output_topk_indices_list: List[List[List[int]]]
+    output_soft_mask_list: List[List[bool]]  # True=soft token, False=discrete token
     # ==========
     # end of soft thinking
     # ==========
@@ -663,6 +664,7 @@ class BatchStrOut:
     # ==========
     output_topk_probs_list: List[List[List[float]]]
     output_topk_indices_list: List[List[List[int]]]
+    output_soft_mask_list: List[List[bool]]  # True=soft token, False=discrete token
     # ==========
     # end of soft thinking
     # ==========

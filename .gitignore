@@ -127,3 +127,4 @@ outputs
 venv/
 
 scripts/train/checkpoints/
+venv_2/

@@ -19,7 +19,7 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)
-    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500", "math-aime", "gpqa", "DAPO-Math-17k"]:
+    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500", "WildEval/ZebraLogic", "math-aime", "gpqa", "DAPO-Math-17k", "openai/gsm8k", "uggingFaceH4/MATH-500", "open-r1/Big-Math-RL-Verified-Processed"]:
         # from . import math_reward
 
         # res = math_reward.compute_score(solution_str, ground_truth)

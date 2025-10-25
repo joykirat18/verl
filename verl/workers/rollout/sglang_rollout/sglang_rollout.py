@@ -46,7 +46,7 @@ from verl import DataProto
 from verl.third_party.sglang import parallel_state as sglang_ps
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.net_utils import is_ipv6
-from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length
+from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length, pad_sequence_to_length_dim
 from verl.workers.rollout.base import BaseRollout
 
 if TYPE_CHECKING:
@@ -76,19 +76,72 @@ def _post_process_outputs(tokenizer, output):
             output_token_ids.append(token_ids)
         log_probs = torch.tensor(log_probs)
         output_token_ids = torch.tensor(output_token_ids)
-        return output_token_ids, log_probs
+        
+        # Extract soft token topk probs and indices if available
+        topk_probs_list = None
+        topk_indices_list = None
+        soft_mask_list = None
+        
+        if "output_topk_prob_list" in resp["meta_info"] and "output_topk_idx_list" in resp["meta_info"]:
+            topk_probs_list = resp["meta_info"]["output_topk_prob_list"]
+            topk_indices_list = resp["meta_info"]["output_topk_idx_list"]
+            # Convert to tensors
+            if topk_probs_list:
+                topk_probs_list = torch.tensor(topk_probs_list)  # shape: [seq_len, topk]
+            if topk_indices_list:
+                topk_indices_list = torch.tensor(topk_indices_list)  # shape: [seq_len, topk]
+            
+            if "output_soft_thinking_modes_list" in resp["meta_info"]:
+                soft_mask_list = resp["meta_info"]["output_soft_thinking_modes_list"]
+                if soft_mask_list:
+                    soft_mask_list = torch.tensor(soft_mask_list, dtype=torch.bool)  # shape: [seq_len]
+        
+        return output_token_ids, log_probs, topk_probs_list, topk_indices_list, soft_mask_list
 
     out_map = map(lambda x: _map_each_response(x), output)
     batched_output_token_ids = []
     batched_logprobs = []
-    for output_token_ids, log_probs in out_map:
+    batched_topk_probs = []
+    batched_topk_indices = []
+    batched_soft_masks = []
+    
+    for output_token_ids, log_probs, topk_probs, topk_indices, soft_mask in out_map:
         batched_output_token_ids.append(output_token_ids)
         batched_logprobs.append(log_probs)
+        if topk_probs is not None:
+            batched_topk_probs.append(topk_probs)
+        if topk_indices is not None:
+            batched_topk_indices.append(topk_indices)
+        if soft_mask is not None:
+            batched_soft_masks.append(soft_mask)
+    
     pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     batched_output_token_ids = pad_sequence(batched_output_token_ids, batch_first=True, padding_value=pad_token_id)
     if len(batched_logprobs) > 0:
         batched_logprobs = pad_sequence(batched_logprobs, batch_first=True, padding_value=pad_token_id)
-    return batched_output_token_ids, batched_logprobs
+    
+    # Pad soft token data if available
+    if len(batched_topk_probs) > 0:
+        # Pad to max sequence length for topk probs: shape will be [batch, max_seq_len, topk]
+        batched_topk_probs = pad_sequence(batched_topk_probs, batch_first=True, padding_value=-1.0)
+    else:
+        batched_topk_probs = None
+        
+    if len(batched_topk_indices) > 0:
+        # Pad to max sequence length for topk indices: shape will be [batch, max_seq_len, topk]
+        batched_topk_indices = pad_sequence(batched_topk_indices, batch_first=True, padding_value=-1)
+    else:
+        batched_topk_indices = None
+    
+    # Pad soft thinking modes mask if available
+    if len(batched_soft_masks) > 0:
+        # Pad to max sequence length: shape will be [batch, max_seq_len]
+        # Use False for padding (padded positions are NOT soft tokens)
+        batched_soft_masks = pad_sequence(batched_soft_masks, batch_first=True, padding_value=False)
+    else:
+        batched_soft_masks = None
+    
+    return batched_output_token_ids, batched_logprobs, batched_topk_probs, batched_topk_indices, batched_soft_masks
 
 
 class SGLangRollout(BaseRollout):
@@ -339,10 +392,26 @@ class SGLangRollout(BaseRollout):
 
             response = out[0].to(idx.device)
             # log_probs = out[1].to(idx.device)
+            topk_probs = out[2].to(idx.device) if out[2] is not None else None
+            topk_indices = out[3].to(idx.device) if out[3] is not None else None
+            soft_mask = out[4].to(idx.device) if out[4] is not None else None
+
+            breakpoint()
+
 
             if response.shape[1] < self.config.response_length:
                 response = pad_sequence_to_length(response, self.config.response_length, self.pad_token_id)
-                # log_probs = pad_sequence_to_length(log_probs, self.config.response_length, self.pad_token_id)
+            if soft_mask is not None and soft_mask.shape[1] < self.config.response_length:
+                # Pad soft mask with False (padded positions are NOT soft tokens)
+                soft_mask = pad_sequence_to_length(soft_mask, self.config.response_length, False)
+            
+            # Pad topk data to match response_length
+            # Note: Padding is needed because when soft tokens exist, we use PDF for ALL positions
+            # For discrete positions, topk data comes from SGLang (all probability on the sampled token)
+            if topk_probs is not None and topk_probs.shape[1] < self.config.response_length:
+                # Padded positions are masked out in PDF computation using pad_token_id from response tensor
+                topk_probs = pad_sequence_to_length_dim(topk_probs, self.config.response_length, 0.0, dim=1)
+                topk_indices = pad_sequence_to_length_dim(topk_indices, self.config.response_length, 0, dim=1)
 
             # utilize current sampling params
             if self.sampling_params.get("n", 1) > 1 and do_sample:
@@ -370,15 +439,26 @@ class SGLangRollout(BaseRollout):
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
+        batch_dict = {
+            "prompts": idx,
+            "responses": response,
+            "input_ids": seq,  # here input_ids become the whole sentences
+            # 'old_log_probs': log_probs, # we will recompute old log prob with actor
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+        }
+        
+        # Add soft token data if available
+        if topk_probs is not None:
+            batch_dict["soft_token_probs"] = topk_probs
+        if topk_indices is not None:
+            batch_dict["soft_token_indices"] = topk_indices
+        if soft_mask is not None:
+            batch_dict["soft_token_mask"] = soft_mask
+        
+        # breakpoint()
         batch = TensorDict(
-            {
-                "prompts": idx,
-                "responses": response,
-                "input_ids": seq,  # here input_ids become the whole sentences
-                # 'old_log_probs': log_probs, # we will recompute old log prob with actor
-                "attention_mask": attention_mask,
-                "position_ids": position_ids,
-            },
+            batch_dict,
             batch_size=batch_size,
         )
 
@@ -386,7 +466,9 @@ class SGLangRollout(BaseRollout):
         if self.config.free_cache_engine and self.inference_engine._engine is not None and self.inference_engine._engine.tokenizer_manager is not None:
             self.inference_engine._engine.flush_cache()
 
-        return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+        # Add pad_token_id to meta_info for actor to use in PDF computation
+        meta_info = {"pad_token_id": self.pad_token_id}
+        return DataProto(batch=batch, non_tensor_batch=non_tensor_batch, meta_info=meta_info)
 
     # this function is left for uniform train-inference resharding
     def update_weights(self, params_iter):
