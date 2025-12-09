@@ -3,10 +3,10 @@ set -x
 export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
 export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
 export RAY_TMPDIR="/nas-hdd/joykirat/tmp_ray"
-export HUGGINGFACE_TOKEN='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'
-export HF_TOKEN='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'
+export HUGGINGFACE_TOKEN='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'
+export HF_TOKEN='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'
 
-export CUDA_VISIBLE_DEVICES=4,7
+export CUDA_VISIBLE_DEVICES=2,3
 EXPERIMENT_NAME=qwen06b_math_10k_base_puzzle
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=checkpoints/base/$EXPERIMENT_NAME

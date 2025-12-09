@@ -111,11 +111,11 @@ class vLLMRollout(BaseRollout):
 
         max_model_len = int(config.max_model_len or config.prompt_length + config.response_length)
 
-        if max_num_batched_tokens < max_model_len and self.config.enable_chunked_prefill:
-            raise ValueError(
-                "Enable chunked prefill, max_num_batched_tokens is smaller than max_model_len, \
-                             please increase max_num_batched_tokens or disable chunked prefill"
-            )
+        # if max_num_batched_tokens < max_model_len and self.config.enable_chunked_prefill:
+            # raise ValueError(
+                # "Enable chunked prefill, max_num_batched_tokens is smaller than max_model_len, \
+                            #  please increase max_num_batched_tokens or disable chunked prefill"
+            # )
 
         trust_remote_code = kwargs.get("trust_remote_code", False)
         load_format = "dummy" if config.load_format.startswith("dummy") else config.load_format
@@ -256,7 +256,7 @@ class vLLMRollout(BaseRollout):
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
-                use_tqdm=False,
+                use_tqdm=True,
             )
 
             # TODO(sgm): disable logprob when recompute_log_prob is enable
