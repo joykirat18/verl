@@ -15,7 +15,29 @@
 
 
 def _default_compute_score(data_source, solution_str, ground_truth, extra_info=None):
-    if data_source == "openai/gsm8k":
+    if data_source == "countdown":
+        from . import countdown
+
+        res = countdown.compute_score(solution_str, ground_truth)
+    elif data_source == "countdown-state":
+        from . import countdown_state
+
+        res = countdown_state.compute_score(solution_str, ground_truth)
+    
+    elif data_source == "blocksworld-state-inline":
+        from . import blocksworldStateInline
+
+        res = blocksworldStateInline.compute_score(solution_str, ground_truth)
+    elif data_source == "blocksworld":
+        from . import blocksworld
+
+        res = blocksworld.compute_score(solution_str, ground_truth)
+    
+    elif data_source == "blocksworld-state":
+        from . import blocksworldState
+
+        res = blocksworldState.compute_score(solution_str, ground_truth)
+    elif data_source == "openai/gsm8k":
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)
