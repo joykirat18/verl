@@ -28,6 +28,11 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
         from . import blocksworldStateInline
 
         res = blocksworldStateInline.compute_score(solution_str, ground_truth)
+    
+    elif data_source == "blocksworld-state-action":
+        from . import blocksworldStateAction
+
+        res = blocksworldStateAction.compute_score(solution_str, ground_truth)
     elif data_source == "blocksworld":
         from . import blocksworld
 

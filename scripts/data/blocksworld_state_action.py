@@ -86,9 +86,9 @@ holding(X): you are holding block X
 handempty: you are not holding any block
 
 The state must list all facts that are true. Any fact not listed is assumed to be false.
-Every thinking step must be followed by EXACTLY ONE <state> block.
-No two thinking steps may share the same <state> block.
-Missing or misplaced <state> tags makes the output invalid.
+Each <state> must immediately follow exactly ONE <action>.
+No two steps may share the same <state>.
+Missing, extra, or misplaced tags make the output invalid.
 
 [Problem]
 Here is the initial state of the blocks: {question}
@@ -97,24 +97,22 @@ Here is the goal state of the blocks: {answer}.
 Show your work using the following format:
 
 <think>
-Explain your reasoning step by step about how the blocks should be rearranged to reach the goal state.
-<state>
-on(...)
-clear(...)
-holding(...) or handempty
-</state>
-
-Based on the current state, think about the next step and write the next <state> block.
-<state>
-on(...)
-clear(...)
-holding(...) or handempty
-</state>
-.....
-(Repeat: based on the current state, think about the next step and write the next <state> block.)
+Think about the next valid step based on the current state.
 </think>
 
-After completing your reasoning, provide the final sequence of actions in <answer> </answer> tags, for example:
+<action>
+(one valid action)
+</action>
+
+<state>
+on(...)
+clear(...)
+holding(...) or handempty
+</state>
+
+(Repeat the <think> <action> <state> blocks as many times as needed, until the goal state is reached.)
+
+After reaching the goal state, provide the final sequence of actions in <answer> </answer> tags, for example:
 
 <answer>
 unstack the cyan block from on top of the emerald block
@@ -128,7 +126,7 @@ Do not output anything outside the specified tags.
             reward_model = {"style": "rule", "ground_truth": {"question": question, "answer": answer, "solution": solution}}
 
             data = {
-                "data_source": 'blocksworld-state-inline',
+                "data_source": 'blocksworld-state-action',
                 "prompt": prompt,
                 "ability": "math",
                 "reward_model": reward_model,

@@ -9,7 +9,7 @@ from openai import RateLimitError, APIConnectionError, APIError, APITimeoutError
 from typing import List, Dict, Optional
 
 
-test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld/eval.parquet"
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_inline/eval.parquet"
 model = "o4-mini"
 test_data = pd.read_parquet(test_data)
 
@@ -168,7 +168,7 @@ for i in tqdm(range(len(messages))):
 
 
 import json
-with open(f'{model}_responses.json', 'w') as f:
+with open(f'{model}_responses_with_state_inline.json', 'w') as f:
     json.dump(final_responses, f)
 
 
