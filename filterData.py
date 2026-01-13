@@ -364,7 +364,408 @@ class BlocksworldCorrectnessReward:
 
 # correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth)
 
-test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_inline/eval.parquet"
+def softFormatReward(text):
+    """
+    Relaxed format reward that gives partial credit for matching tags.
+    Returns a score between 0.0 and 0.5 based on tag matching.
+    """
+    count = 0.0
+    max_score = 0.5
+    
+    # Check for matching redacted_reasoning tags
+    if text.count('<think>') == text.count('</think>') and text.count('<think>') > 0:
+        count += 0.1
+    
+    # Check for matching reasoning tags
+    if text.count('<reasoning>') == text.count('</reasoning>') and text.count('<reasoning>') > 0:
+        count += 0.1
+    
+    # Check for matching action tags
+    if text.count('<action>') == text.count('</action>') and text.count('<action>') > 0:
+        count += 0.1
+    
+    # Check for matching state tags
+    if text.count('<state>') == text.count('</state>') and text.count('<state>') > 0:
+        count += 0.1
+    
+    # Check for answer tags
+    if text.count('<answer>') == 1 and text.count('</answer>') == 1:
+        count += 0.1
+    
+    return min(count, max_score)
+
+def hardFormatReward(text: str) -> tuple[bool, str]:
+
+
+    if text.count('<think>') == 0 or text.count('</think>') == 0:
+        return 0
+
+    if text.count('<answer>') != 1 or text.count('</answer>') != 1:
+        return 0
+
+    # check the order of search/result
+    current_pos = 0
+    while True:
+        think_pos = text.find('<think>', current_pos)
+        if think_pos == -1:
+            break
+        think_end_pos = text.find('</think>', think_pos)
+        if think_end_pos == -1:
+            return 0
+
+        state_pos = text.find('<state>', think_pos)
+        if state_pos == -1:
+            break
+
+        state_end_pos = text.find('</state>', state_pos)
+        if state_end_pos == -1:
+            return 0
+
+        if not (think_pos < think_end_pos < state_pos < state_end_pos):
+            return 0
+        current_pos = state_end_pos
+
+    answer_start = text.find('<answer>')
+    answer_end = text.find('</answer>')
+    if answer_start > answer_end:
+        return 0
+    
+    return 0.5
+
+
+import re
+from typing import List
+
+STATE_RE = re.compile(r"<state>(.*?)</state>", re.DOTALL)
+ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL)
+
+def extract_states(text: str) -> List[List[str]]:
+    return [
+        [line.strip() for line in block.splitlines() if line.strip()]
+        for block in STATE_RE.findall(text)
+    ]
+
+def extract_actions(text: str) -> List[str]:
+    """
+    Extracts all actions from <action> tags.
+    Returns a list of action strings (one per tag).
+    """
+    return [action.strip() for action in ACTION_RE.findall(text)]
+
+
+def parse_state_and_blocks(state_lines):
+    on = {}
+    clear = set()
+    holding = None
+    handempty = False
+    blocks = set()
+
+    for line in state_lines:
+        if line.startswith("on(") and line.endswith(")"):
+            # Extract content between parentheses and verify format: exactly 2 args separated by ", "
+            content = line[3:-1]
+            if ", " not in content:
+                return None  # Must have comma and space
+            parts = content.split(", ")
+            if len(parts) != 2:
+                return None  # Must have exactly 2 arguments
+            x, y = parts
+            on[x] = y
+            blocks.add(x)
+            if y != "table":
+                blocks.add(y)
+
+        elif line.startswith("clear(") and line.endswith(")"):
+            # Extract content between parentheses and verify format: exactly 1 arg (no commas)
+            content = line[6:-1]
+            if "," in content:
+                return None  # Must have exactly 1 argument (no commas)
+            x = content
+            clear.add(x)
+            blocks.add(x)
+
+        elif line.startswith("holding(") and line.endswith(")"):
+            # Extract content between parentheses and verify format: exactly 1 arg (no commas)
+            content = line[8:-1]
+            if "," in content:
+                return None  # Must have exactly 1 argument (no commas)
+            x = content
+            if holding is not None:
+                return None
+            holding = x
+            blocks.add(x)
+
+        elif line == "handempty":
+            handempty = True
+
+        else:
+            return None  # illegal predicate
+
+    return on, clear, holding, handempty, blocks
+
+
+def is_valid_state(state_lines: List[str]) -> bool:
+    parsed = parse_state_and_blocks(state_lines)
+    if parsed is None:
+        return False
+
+    on, clear, holding, handempty, blocks = parsed
+
+    # 1. Exactly one hand condition
+    if (holding is None) == (not handempty):
+        return False
+
+    # 2. Each block appears exactly once
+    placed = set(on.keys())
+    if holding:
+        placed.add(holding)
+
+    if placed != blocks:
+        return False
+
+    # 3. clear(X) consistency
+    for b in clear:
+        if b == holding:
+            return False
+        if b in on.values():
+            return False
+
+    # 4. Table constraints
+    if "table" in clear or holding == "table":
+        return False
+    for x, y in on.items():
+        if x == "table":
+            return False
+
+    # 5. No cycles in on-relations
+    for start in on:
+        seen = set()
+        cur = start
+        while cur in on:
+            cur = on[cur]
+            if cur == "table":
+                break
+            if cur in seen:
+                return False
+            seen.add(cur)
+
+    return True
+
+def intermediate_state_rewards(model_output: str):
+    """
+    Returns one reward per <state>.
+    1.0 if parseable & valid, else 0.0
+    """
+    states = extract_states(model_output)
+    return [1.0 if is_valid_state(s) else 0.0 for s in states]
+
+
+
+def checkFormat(response):
+        response = response.strip()
+
+        # Rule 1: Must start with <think> and end with </answer>
+        if not response.startswith("<think>") or not response.endswith("</answer>"):
+            return False
+
+        # Rule 2: Must have exactly one <answer> and one </answer>
+        if response.count("<answer>") != 1 or response.count("</answer>") != 1:
+            return False
+
+        # Rule 3: Must have matching pairs of <think> and </think> (at least one)
+        if response.count("<think>") != response.count("</think>"):
+            return False
+        if response.count("<think>") == 0:
+            return False
+
+        # Rule 4: Must have matching pairs of <reasoning> and </reasoning> (at least one)
+        if response.count("<reasoning>") != response.count("</reasoning>"):
+            return False
+        if response.count("<reasoning>") == 0:
+            return False
+
+        # Rule 5: Must have matching pairs of <action> and </action> (at least one)
+        if response.count("<action>") != response.count("</action>"):
+            return False
+        if response.count("<action>") == 0:
+            return False
+
+        # Rule 6: Must have matching pairs of <state> and </state> (required, at least one)
+        if response.count("<state>") != response.count("</state>"):
+            return False
+        if response.count("<state>") == 0:
+            return False
+
+        # Rule 7: Number of reasoning, actions, and states must all be equal
+        # (each reasoning must be followed by an action, which is followed by a state)
+        if response.count("<reasoning>") != response.count("<action>"):
+            return False
+        if response.count("<action>") != response.count("<state>"):
+            return False
+
+        # Rule 8: Find all tag positions
+        import re
+        redacted_reasoning_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+        reasoning_pattern = re.compile(r'<reasoning>(.*?)</reasoning>', re.DOTALL)
+        action_pattern = re.compile(r'<action>(.*?)</action>', re.DOTALL)
+        state_pattern = re.compile(r'<state>(.*?)</state>', re.DOTALL)
+        answer_pattern = re.compile(r'<answer>(.*?)</answer>', re.DOTALL)
+
+        redacted_reasoning_matches = list(redacted_reasoning_pattern.finditer(response))
+        reasoning_matches = list(reasoning_pattern.finditer(response))
+        action_matches = list(action_pattern.finditer(response))
+        state_matches = list(state_pattern.finditer(response))
+        answer_matches = list(answer_pattern.finditer(response))
+
+        if len(answer_matches) != 1:
+            return False
+
+        answer_match = answer_matches[0]
+        answer_start = answer_match.start()
+        answer_end = answer_match.end()
+
+        # Rule 9: <answer> must come after all reasoning/action/state blocks
+        for match in redacted_reasoning_matches:
+            if match.end() > answer_start:
+                return False
+        for match in reasoning_matches:
+            if match.end() > answer_start:
+                return False
+        for action_match in action_matches:
+            if action_match.end() > answer_start:
+                return False
+        for state_match in state_matches:
+            if state_match.end() > answer_start:
+                return False
+
+        # Rule 10: Verify the pattern: all reasoning/action/state are inside <think>
+        # There should be exactly one redacted_reasoning block that contains all reasoning/action/state
+        if len(redacted_reasoning_matches) != 1:
+            return False
+        
+        redacted_reasoning_match = redacted_reasoning_matches[0]
+        redacted_reasoning_start = redacted_reasoning_match.start()
+        redacted_reasoning_end = redacted_reasoning_match.end()
+        
+        # All reasoning, action, and state tags must be inside the redacted_reasoning block
+        for match in reasoning_matches:
+            if match.start() < redacted_reasoning_start or match.end() > redacted_reasoning_end:
+                return False
+        for action_match in action_matches:
+            if action_match.start() < redacted_reasoning_start or action_match.end() > redacted_reasoning_end:
+                return False
+        for state_match in state_matches:
+            if state_match.start() < redacted_reasoning_start or state_match.end() > redacted_reasoning_end:
+                return False
+        
+        # Rule 11: Verify the pattern: reasoning, action, state (repeated) inside redacted_reasoning
+        # All tags must appear in the correct order: reasoning, action, state, reasoning, action, state, ...
+        all_tags = []
+        for match in reasoning_matches:
+            all_tags.append(('reasoning', match.start(), match.end()))
+        for match in action_matches:
+            all_tags.append(('action', match.start(), match.end()))
+        for match in state_matches:
+            all_tags.append(('state', match.start(), match.end()))
+        
+        all_tags.sort(key=lambda x: x[1])  # Sort by start position
+
+        # Check that we have the pattern: reasoning, action, state (repeated)
+        if len(all_tags) == 0:
+            return False  # Must have at least one triplet
+        
+        i = 0
+        while i < len(all_tags):
+            # Each triplet should be: reasoning, action, state
+            if i + 2 >= len(all_tags):
+                return False  # Not enough tags for a complete triplet
+            
+            if all_tags[i][0] != 'reasoning':
+                return False
+            if all_tags[i+1][0] != 'action':
+                return False
+            if all_tags[i+2][0] != 'state':
+                return False
+            
+            # Verify order: reasoning ends before action starts, action ends before state starts
+            if all_tags[i][2] > all_tags[i+1][1] or all_tags[i+1][2] > all_tags[i+2][1]:
+                return False
+            
+            i += 3
+
+        # Rule 12: Verify all reasoning blocks have non-empty content
+        for match in reasoning_matches:
+            content = match.group(1).strip()
+            if not content:
+                return False
+
+        # Rule 13: Verify all action blocks have non-empty content
+        for match in action_matches:
+            content = match.group(1).strip()
+            if not content:
+                return False
+
+        # Rule 14: Verify all state blocks have non-empty content
+        for match in state_matches:
+            content = match.group(1).strip()
+            if not content:
+                return False
+
+        # Rule 15: Verify answer has non-empty content
+        answer_content = answer_match.group(1).strip()
+        if not answer_content:
+            return False
+
+        # Rule 16: Verify there's no content between redacted_reasoning block end and <answer>
+        redacted_reasoning_end = redacted_reasoning_matches[0].end()
+        between_content = response[redacted_reasoning_end:answer_start].strip()
+        if between_content:
+            return False
+
+        return True
+
+def compute_score(model_output: str, ground_truth):
+    final_reward = 0.0
+    format_reward = 0.0
+    state_reward = 0.0
+    correctness_reward = 0.0
+    actual_correctness_reward = 0.0
+
+    # Always compute relaxed format reward (gives partial credit)
+    format_reward = softFormatReward(model_output)
+    
+    # Compute strict format reward (only if format is perfect)
+    if checkFormat(model_output):
+        format_reward += 0.5
+
+    # Try to extract answer and compute correctness reward (even if format fails)
+    answer_matches = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)
+    if answer_matches:
+        predicted_plan = answer_matches[-1].strip()
+        if predicted_plan:
+            # Compute correctness reward based on the plan from answer tag
+            correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_plan, ground_truth) 
+
+            if correctness_reward == 2.0:
+                actual_correctness_reward = 1.0
+            else:
+                actual_correctness_reward = 0.0
+    
+    # Compute state reward (even if format fails)
+    intermediate_state_reward = intermediate_state_rewards(model_output)
+    if len(intermediate_state_reward) > 0:
+        state_reward = sum(intermediate_state_reward) / len(intermediate_state_reward)
+
+    final_reward = format_reward + state_reward + correctness_reward
+
+    return {
+        "score": final_reward, 
+        "format_reward": format_reward, 
+        "state_reward": state_reward, 
+        "correctness_reward": actual_correctness_reward
+    }
+
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_inline/train.parquet"
 
 test_data = pd.read_parquet(test_data)
 
@@ -374,7 +775,7 @@ for i in range(len(test_data)):
     ground_truths.append(test_data['reward_model'][i]['ground_truth'])
 
 
-predicted_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/o4-mini_responses_with_state_action.json"
+predicted_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/o4-mini_responses_with_state_inline.json"
 # "/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state/qwen1_7b_blocksworld_with_state_v1/val_rollout/800.jsonl"
 
 def get_data(path):
@@ -408,6 +809,23 @@ def get_accuracy(predicted_data, ground_truths):
     
     return correct / total
 
+
+data_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/o4-mini_responses_with_state_action_train.json"
+
+data = get_data(data_path)
+filtered_data = []
+
+for i in range(len(data)):
+    score = compute_score(data[i]['response'], ground_truths[i])
+
+    if score['correctness_reward'] == 1.0 and score['format_reward'] == 1.0:
+        filtered_data.append(data[i])
+
+print(len(data))
+print(len(filtered_data))
+    
+
+
 # better_than_prediction = 0
 # from tqdm import tqdm
 # for i in tqdm(range(0, 900, 10)):
@@ -433,10 +851,10 @@ def get_accuracy(predicted_data, ground_truths):
 
 # predicted_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state_inline/qwen1_7b_blocksworld_with_state_inline_v0/val_rollout/900.jsonl"
 
-predicted_data = get_data(predicted_path)
+# predicted_data = get_data(predicted_path)
 
 
-print(get_accuracy(predicted_data, ground_truths))
+# print(get_accuracy(predicted_data, ground_truths))
 
 # print(f"Accuracy: {correct / total}")
 

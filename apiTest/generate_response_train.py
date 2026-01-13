@@ -9,7 +9,7 @@ from openai import RateLimitError, APIConnectionError, APIError, APITimeoutError
 from typing import List, Dict, Optional
 
 
-test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action/eval.parquet"
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action/train.parquet"
 model = "o4-mini"
 test_data = pd.read_parquet(test_data)
 
@@ -155,11 +155,20 @@ def query_model(
     if last_exception:
         raise RuntimeError(f"Error calling API after {max_retries} retries: {last_exception}") from last_exception
 
-
+import json
 final_responses = []
+if not os.path.exists(f'{model}_responses_with_state_action_train.json'):
+    final_responses = []
+else:
+    with open(f'{model}_responses_with_state_action_train.json', 'r') as f:
+        final_responses = json.load(f)
+
+start_index = len(final_responses)
+
 from tqdm import tqdm
-for i in tqdm(range(len(messages))):
-    # breakpoint()
+
+    
+for i in tqdm(range(start_index, len(messages))):
     message = messages[i]
 
     response = query_model(message, model)
@@ -167,7 +176,7 @@ for i in tqdm(range(len(messages))):
     final_responses.append({'question': message[0]['content'], 'response': response})
 
     import json
-    with open(f'{model}_responses_with_state_action.json', 'w') as f:
+    with open(f'{model}_responses_with_state_action_train.json', 'w') as f:
         json.dump(final_responses, f)
 
 
