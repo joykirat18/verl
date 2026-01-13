@@ -27,7 +27,7 @@ from verl.utils.hdfs_io import copy, makedirs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default="blocksworld_state_inline")
+    parser.add_argument("--local_dir", default="blocksworld_state_action")
     parser.add_argument("--hdfs_dir", default=None)
     parser.add_argument("--is_eval", default=False, action="store_true")
 
@@ -77,7 +77,6 @@ put down the [block_name] block
 stack the [block_name] block on top of the [another_block_name] block
 
 State Representation:
-After EVERY individual thinking step, you MUST IMMEDIATELY write the COMPLETE state of the world using <state></state> tags.
 
 The state is written using the following predicates:
 on(X, Y): block X is on block Y or on the table
@@ -86,9 +85,6 @@ holding(X): you are holding block X
 handempty: you are not holding any block
 
 The state must list all facts that are true. Any fact not listed is assumed to be false.
-Each <state> must immediately follow exactly ONE <action>.
-No two steps may share the same <state>.
-Missing, extra, or misplaced tags make the output invalid.
 
 [Problem]
 Here is the initial state of the blocks: {question}
@@ -97,8 +93,10 @@ Here is the goal state of the blocks: {answer}.
 Show your work using the following format:
 
 <think>
-Think about the next valid step based on the current state.
-</think>
+
+<reasoning>
+Think step by step about the next valid step based on the current state.
+</reasoning>
 
 <action>
 (one valid action)
@@ -110,7 +108,21 @@ clear(...)
 holding(...) or handempty
 </state>
 
-(Repeat the <think> <action> <state> blocks as many times as needed, until the goal state is reached.)
+<reasoning>
+Think step by step about the next valid step based on the current state.
+</reasoning>
+
+<action>
+(one valid action)
+</action>
+
+<state>
+on(...)
+clear(...)
+holding(...) or handempty
+</state>
+
+</think>
 
 After reaching the goal state, provide the final sequence of actions in <answer> </answer> tags, for example:
 
@@ -119,6 +131,10 @@ unstack the cyan block from on top of the emerald block
 put down the cyan block
 </answer>
 
+You must first write the action that you took with the <action> tag and then write the state with the <state> tag.
+All actions and states must be inside the <think> tag.
+Every action must be preceded by a reasoning step to determine the next action.
+All actions and states must be inside the <think> </think> tags.
 Do not output anything outside the specified tags.
 """
 

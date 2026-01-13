@@ -364,16 +364,34 @@ class BlocksworldCorrectnessReward:
             return 0.0
 
 def softFormatReward(text):
-    count = 0
-    if text.count('<think>') == text.count('</think>'):
-        count += 0.125
-    if text.count('<state>') == text.count('</state>'):
-        count += 0.125
-    if text.count('<answer>') == 1:
-        count += 0.125
-    if text.count('</answer>') == 1:
-        count += 0.125
-    return count
+    """
+    Relaxed format reward that gives partial credit for matching tags.
+    Returns a score between 0.0 and 0.5 based on tag matching.
+    """
+    count = 0.0
+    max_score = 0.5
+    
+    # Check for matching redacted_reasoning tags
+    if text.count('<think>') == text.count('</think>') and text.count('<think>') > 0:
+        count += 0.1
+    
+    # Check for matching reasoning tags
+    if text.count('<reasoning>') == text.count('</reasoning>') and text.count('<reasoning>') > 0:
+        count += 0.1
+    
+    # Check for matching action tags
+    if text.count('<action>') == text.count('</action>') and text.count('<action>') > 0:
+        count += 0.1
+    
+    # Check for matching state tags
+    if text.count('<state>') == text.count('</state>') and text.count('<state>') > 0:
+        count += 0.1
+    
+    # Check for answer tags
+    if text.count('<answer>') == 1 and text.count('</answer>') == 1:
+        count += 0.1
+    
+    return min(count, max_score)
 
 def hardFormatReward(text: str) -> tuple[bool, str]:
 
@@ -559,29 +577,40 @@ def checkFormat(response):
         if response.count("<think>") == 0:
             return False
 
-        # Rule 4: Must have matching pairs of <action> and </action> (at least one)
+        # Rule 4: Must have matching pairs of <reasoning> and </reasoning> (at least one)
+        if response.count("<reasoning>") != response.count("</reasoning>"):
+            return False
+        if response.count("<reasoning>") == 0:
+            return False
+
+        # Rule 5: Must have matching pairs of <action> and </action> (at least one)
         if response.count("<action>") != response.count("</action>"):
             return False
         if response.count("<action>") == 0:
             return False
 
-        # Rule 5: Must have matching pairs of <state> and </state> (required, at least one)
+        # Rule 6: Must have matching pairs of <state> and </state> (required, at least one)
         if response.count("<state>") != response.count("</state>"):
             return False
         if response.count("<state>") == 0:
             return False
 
-        # Rule 6: Number of actions must equal number of states (each action must be followed by a state)
+        # Rule 7: Number of reasoning, actions, and states must all be equal
+        # (each reasoning must be followed by an action, which is followed by a state)
+        if response.count("<reasoning>") != response.count("<action>"):
+            return False
         if response.count("<action>") != response.count("<state>"):
             return False
 
-        # Rule 7: Find all tag positions
+        # Rule 8: Find all tag positions
         import re
-        reasoning_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+        redacted_reasoning_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+        reasoning_pattern = re.compile(r'<reasoning>(.*?)</reasoning>', re.DOTALL)
         action_pattern = re.compile(r'<action>(.*?)</action>', re.DOTALL)
         state_pattern = re.compile(r'<state>(.*?)</state>', re.DOTALL)
         answer_pattern = re.compile(r'<answer>(.*?)</answer>', re.DOTALL)
 
+        redacted_reasoning_matches = list(redacted_reasoning_pattern.finditer(response))
         reasoning_matches = list(reasoning_pattern.finditer(response))
         action_matches = list(action_pattern.finditer(response))
         state_matches = list(state_pattern.finditer(response))
@@ -594,9 +623,12 @@ def checkFormat(response):
         answer_start = answer_match.start()
         answer_end = answer_match.end()
 
-        # Rule 8: <answer> must come after all reasoning/action/state blocks
-        for reasoning_match in reasoning_matches:
-            if reasoning_match.end() > answer_start:
+        # Rule 9: <answer> must come after all reasoning/action/state blocks
+        for match in redacted_reasoning_matches:
+            if match.end() > answer_start:
+                return False
+        for match in reasoning_matches:
+            if match.end() > answer_start:
                 return False
         for action_match in action_matches:
             if action_match.end() > answer_start:
@@ -605,8 +637,28 @@ def checkFormat(response):
             if state_match.end() > answer_start:
                 return False
 
-        # Rule 9: Verify the pattern: <think> <action> <state> (repeated)
-        # All reasoning, action, and state tags must appear in the correct order
+        # Rule 10: Verify the pattern: all reasoning/action/state are inside <think>
+        # There should be exactly one redacted_reasoning block that contains all reasoning/action/state
+        if len(redacted_reasoning_matches) != 1:
+            return False
+        
+        redacted_reasoning_match = redacted_reasoning_matches[0]
+        redacted_reasoning_start = redacted_reasoning_match.start()
+        redacted_reasoning_end = redacted_reasoning_match.end()
+        
+        # All reasoning, action, and state tags must be inside the redacted_reasoning block
+        for match in reasoning_matches:
+            if match.start() < redacted_reasoning_start or match.end() > redacted_reasoning_end:
+                return False
+        for action_match in action_matches:
+            if action_match.start() < redacted_reasoning_start or action_match.end() > redacted_reasoning_end:
+                return False
+        for state_match in state_matches:
+            if state_match.start() < redacted_reasoning_start or state_match.end() > redacted_reasoning_end:
+                return False
+        
+        # Rule 11: Verify the pattern: reasoning, action, state (repeated) inside redacted_reasoning
+        # All tags must appear in the correct order: reasoning, action, state, reasoning, action, state, ...
         all_tags = []
         for match in reasoning_matches:
             all_tags.append(('reasoning', match.start(), match.end()))
@@ -618,6 +670,9 @@ def checkFormat(response):
         all_tags.sort(key=lambda x: x[1])  # Sort by start position
 
         # Check that we have the pattern: reasoning, action, state (repeated)
+        if len(all_tags) == 0:
+            return False  # Must have at least one triplet
+        
         i = 0
         while i < len(all_tags):
             # Each triplet should be: reasoning, action, state
@@ -637,35 +692,34 @@ def checkFormat(response):
             
             i += 3
 
-        # Rule 10: Verify all reasoning blocks have non-empty content
+        # Rule 12: Verify all reasoning blocks have non-empty content
         for match in reasoning_matches:
             content = match.group(1).strip()
             if not content:
                 return False
 
-        # Rule 11: Verify all action blocks have non-empty content
+        # Rule 13: Verify all action blocks have non-empty content
         for match in action_matches:
             content = match.group(1).strip()
             if not content:
                 return False
 
-        # Rule 12: Verify all state blocks have non-empty content
+        # Rule 14: Verify all state blocks have non-empty content
         for match in state_matches:
             content = match.group(1).strip()
             if not content:
                 return False
 
-        # Rule 13: Verify answer has non-empty content
+        # Rule 15: Verify answer has non-empty content
         answer_content = answer_match.group(1).strip()
         if not answer_content:
             return False
 
-        # Rule 14: Verify there's no content between last state and <answer>
-        if len(state_matches) > 0:
-            last_state_end = max(match.end() for match in state_matches)
-            between_content = response[last_state_end:answer_start].strip()
-            if between_content:
-                return False
+        # Rule 16: Verify there's no content between redacted_reasoning block end and <answer>
+        redacted_reasoning_end = redacted_reasoning_matches[0].end()
+        between_content = response[redacted_reasoning_end:answer_start].strip()
+        if between_content:
+            return False
 
         return True
 
@@ -674,48 +728,41 @@ def compute_score(model_output: str, ground_truth):
     format_reward = 0.0
     state_reward = 0.0
     correctness_reward = 0.0
+    actual_correctness_reward = 0.0
 
+    # Always compute relaxed format reward (gives partial credit)
+    format_reward = softFormatReward(model_output)
     
+    # Compute strict format reward (only if format is perfect)
     if checkFormat(model_output):
-        format_reward = 0.5
+        format_reward += 0.5
 
-        # Extract actions from <action> tags and combine them into a plan
-        actions = extract_actions(model_output)
-        if actions:
-            # Combine all actions into a plan string (one action per line)
-            predicted_plan = "\n".join(actions)
-        else:
-            # Fallback: extract from answer tag if no action tags found
-            predicted_plan = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)[-1].strip()
-        
-        # Compute correctness reward based on the plan from action tags
-        correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_plan, ground_truth) 
+    # Try to extract answer and compute correctness reward (even if format fails)
+    answer_matches = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)
+    if answer_matches:
+        predicted_plan = answer_matches[-1].strip()
+        if predicted_plan:
+            # Compute correctness reward based on the plan from answer tag
+            correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_plan, ground_truth) 
 
-        if correctness_reward == 2.0:
-            correctness_reward = 1.0
-        else:
-            correctness_reward = 0.0
-        
-        # Compute state reward
-        # Format check already ensures at least one state exists
-        intermediate_state_reward = intermediate_state_rewards(model_output)
-        
-        if len(intermediate_state_reward) == 0:
-            state_reward = 0.0
-            correctness_reward = 0.0
-        elif len(intermediate_state_reward) == 1:
-            state_reward = 0.1
-        elif len(intermediate_state_reward) >= 2:
-            state_reward = 0.25
-        
-        if len(intermediate_state_reward) >= 1:
-            state_reward += 0.5 * sum(intermediate_state_reward) / len(intermediate_state_reward)
+            if correctness_reward == 2.0:
+                actual_correctness_reward = 1.0
+            else:
+                actual_correctness_reward = 0.0
+    
+    # Compute state reward (even if format fails)
+    intermediate_state_reward = intermediate_state_rewards(model_output)
+    if len(intermediate_state_reward) > 0:
+        state_reward = sum(intermediate_state_reward) / len(intermediate_state_reward)
 
-
-        
     final_reward = format_reward + state_reward + correctness_reward
 
-    return {"score": final_reward, "format_reward": format_reward, "state_reward": state_reward, "correctness_reward": correctness_reward}
+    return {
+        "score": final_reward, 
+        "format_reward": format_reward, 
+        "state_reward": state_reward, 
+        "correctness_reward": actual_correctness_reward
+    }
     
     
 
