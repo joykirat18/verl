@@ -77,7 +77,7 @@ put down the [block_name] block
 stack the [block_name] block on top of the [another_block_name] block
 
 State Representation:
-After each reasoning step, you must explicitly write the full state of the world.
+After EVERY individual thinking step, you MUST IMMEDIATELY write the COMPLETE state of the world using <state></state> tags.
 
 The state is written using the following predicates:
 on(X, Y): block X is on block Y or on the table
@@ -86,6 +86,9 @@ holding(X): you are holding block X
 handempty: you are not holding any block
 
 The state must list all facts that are true. Any fact not listed is assumed to be false.
+Every thinking step must be followed by EXACTLY ONE <state> block.
+No two thinking steps may share the same <state> block.
+Missing or misplaced <state> tags makes the output invalid.
 
 [Problem]
 Here is the initial state of the blocks: {question}
@@ -94,13 +97,10 @@ Here is the goal state of the blocks: {answer}.
 Show your work using the following format:
 
 <think>
-Explain your reasoning step by step about how the blocks should be rearranged to reach the goal state.
+Explain your thinking step by step about how the blocks should be rearranged to reach the goal state.
 
-After each reasoning step, explicitly write the complete current state of the world using a <state> block.
+After each thinking step, explicitly write the complete current state of the world using a <state> block.
 You may include as many <state> </state> blocks as needed within this <think> block.
-
-Each <state> block must list **all and only** the facts that are true at that moment.
-Any fact not listed is assumed to be false.
 
 <state>
 on(...)
@@ -108,10 +108,10 @@ clear(...)
 holding(...) or handempty
 </state>
 
-(Repeat reasoning and <state> blocks as needed.)
+(Repeat: every thinking step must be followed by exactly one <state> block.)
 </think>
 
-After completing your reasoning, provide the final sequence of actions in <answer> </answer> tags, for example:
+After completing your thinking, provide the final sequence of actions in <answer> </answer> tags, for example:
 
 <answer>
 unstack the cyan block from on top of the emerald block

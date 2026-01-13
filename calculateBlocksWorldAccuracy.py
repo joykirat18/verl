@@ -1,4 +1,3 @@
-
 import re
 import sympy
 import logging
@@ -7,7 +6,7 @@ from functools import partial, update_wrapper
 import signal
 import json
 from typing import List
-
+import pandas as pd
 
 class BlocksworldCorrectnessReward:
     @staticmethod
@@ -363,328 +362,109 @@ class BlocksworldCorrectnessReward:
             print(f'Error in computing BW verifier reward - {e}')
             return 0.0
 
-def softFormatReward(text):
-    count = 0
-    if text.count('<think>') == text.count('</think>'):
-        count += 0.125
-    if text.count('<state>') == text.count('</state>'):
-        count += 0.125
-    if text.count('<answer>') == 1:
-        count += 0.125
-    if text.count('</answer>') == 1:
-        count += 0.125
-    return count
+# correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth)
 
-def hardFormatReward(text: str) -> tuple[bool, str]:
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_inline/eval.parquet"
+
+test_data = pd.read_parquet(test_data)
+
+ground_truths = []
+
+for i in range(len(test_data)):
+    ground_truths.append(test_data['reward_model'][i]['ground_truth'])
 
 
-    if text.count('<think>') == 0 or text.count('</think>') == 0:
-        return 0
+predicted_path = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state/qwen1_7b_blocksworld_with_state_v1/val_rollout/700.jsonl"
+# "/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state/qwen1_7b_blocksworld_with_state_v1/val_rollout/800.jsonl"
 
-    if text.count('<answer>') != 1 or text.count('</answer>') != 1:
-        return 0
+def get_data(path):
+    data = []
+    with open(path, "r") as f:
+        for line in f:
+            data.append(json.loads(line))
+    return data
 
-    # check the order of search/result
-    current_pos = 0
-    while True:
-        think_pos = text.find('<think>', current_pos)
-        if think_pos == -1:
-            break
-        think_end_pos = text.find('</think>', think_pos)
-        if think_end_pos == -1:
-            return 0
+def get_accuracy(predicted_data, ground_truths):
+    correct = 0
+    total = 0
 
-        state_pos = text.find('<state>', think_pos)
-        if state_pos == -1:
-            break
+    for i in range(len(predicted_data)):
+        ground_truth = ground_truths[i]
+        model_output = predicted_data[i]['output']
+        total += 1
+        try:
+            predicted_answer = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)[-1].strip()
+        except Exception as e:
+            print(f"Error in parsing predicted answer - {e}")
+            continue
 
-        state_end_pos = text.find('</state>', state_pos)
-        if state_end_pos == -1:
-            return 0
-
-        if not (think_pos < think_end_pos < state_pos < state_end_pos):
-            return 0
-        current_pos = state_end_pos
-
-    answer_start = text.find('<answer>')
-    answer_end = text.find('</answer>')
-    if answer_start > answer_end:
-        return 0
+        reward = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth)
+        if reward > 0.0:
+            correct += 1
+        
     
-    return 0.5
+    return correct / total
 
+# better_than_prediction = 0
+# from tqdm import tqdm
+# for i in tqdm(range(0, 900, 10)):
+#     predicted_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/base/qwen1_7b_blocksworld_correctness_only_v0/val_rollout/{i}.jsonl"
+#     state_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state/qwen1_7b_blocksworld_with_state_v1/val_rollout/{i}.jsonl"
+#     inline_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state_inline/qwen1_7b_blocksworld_with_state_inline_v0/val_rollout/{i}.jsonl"
 
-import re
-from typing import List
+#     predicted_data = get_data(predicted_path)
+#     state_data = get_data(state_path)
+#     inline_data = get_data(inline_path)
 
-STATE_RE = re.compile(r"<state>(.*?)</state>", re.DOTALL)
+#     prediction_accuracy = get_accuracy(predicted_data, ground_truths)
+#     state_accuracy = get_accuracy(state_data, ground_truths)
+#     inline_accuracy = get_accuracy(inline_data, ground_truths)
 
-def extract_states(text: str) -> List[List[str]]:
-    return [
-        [line.strip() for line in block.splitlines() if line.strip()]
-        for block in STATE_RE.findall(text)
-    ]
+#     if inline_accuracy > prediction_accuracy:
+#         print(f"Inline accuracy is better than prediction accuracy for {i}")
+#         better_than_prediction += 1
 
-
-def parse_state_and_blocks(state_lines):
-    on = {}
-    clear = set()
-    holding = None
-    handempty = False
-    blocks = set()
-
-    for line in state_lines:
-        if line.startswith("on(") and line.endswith(")"):
-            # Extract content between parentheses and verify format: exactly 2 args separated by ", "
-            content = line[3:-1]
-            if ", " not in content:
-                return None  # Must have comma and space
-            parts = content.split(", ")
-            if len(parts) != 2:
-                return None  # Must have exactly 2 arguments
-            x, y = parts
-            on[x] = y
-            blocks.add(x)
-            if y != "table":
-                blocks.add(y)
-
-        elif line.startswith("clear(") and line.endswith(")"):
-            # Extract content between parentheses and verify format: exactly 1 arg (no commas)
-            content = line[6:-1]
-            if "," in content:
-                return None  # Must have exactly 1 argument (no commas)
-            x = content
-            clear.add(x)
-            blocks.add(x)
-
-        elif line.startswith("holding(") and line.endswith(")"):
-            # Extract content between parentheses and verify format: exactly 1 arg (no commas)
-            content = line[8:-1]
-            if "," in content:
-                return None  # Must have exactly 1 argument (no commas)
-            x = content
-            if holding is not None:
-                return None
-            holding = x
-            blocks.add(x)
-
-        elif line == "handempty":
-            handempty = True
-
-        else:
-            return None  # illegal predicate
-
-    return on, clear, holding, handempty, blocks
-
-
-def is_valid_state(state_lines: List[str]) -> bool:
-    parsed = parse_state_and_blocks(state_lines)
-    if parsed is None:
-        return False
-
-    on, clear, holding, handempty, blocks = parsed
-
-    # 1. Exactly one hand condition
-    if (holding is None) == (not handempty):
-        return False
-
-    # 2. Each block appears exactly once
-    placed = set(on.keys())
-    if holding:
-        placed.add(holding)
-
-    if placed != blocks:
-        return False
-
-    # 3. clear(X) consistency
-    for b in clear:
-        if b == holding:
-            return False
-        if b in on.values():
-            return False
-
-    # 4. Table constraints
-    if "table" in clear or holding == "table":
-        return False
-    for x, y in on.items():
-        if x == "table":
-            return False
-
-    # 5. No cycles in on-relations
-    for start in on:
-        seen = set()
-        cur = start
-        while cur in on:
-            cur = on[cur]
-            if cur == "table":
-                break
-            if cur in seen:
-                return False
-            seen.add(cur)
-
-    return True
-
-def intermediate_state_rewards(model_output: str):
-    """
-    Returns one reward per <state>.
-    1.0 if parseable & valid, else 0.0
-    """
-    states = extract_states(model_output)
-    return [1.0 if is_valid_state(s) else 0.0 for s in states]
+# print(f"Better than prediction: {better_than_prediction}")
 
 
 
-def checkFormat(response):
-        response = response.strip()
+predicted_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state_inline/qwen1_7b_blocksworld_with_state_inline_v0/val_rollout/900.jsonl"
 
-        # Rule 1: Must start with <think> and end with </answer>
-        if not response.startswith("<think>") or not response.endswith("</answer>"):
-            return False
+predicted_data = get_data(predicted_path)
 
-        # Rule 2: Must have exactly one <answer> and one </answer>
-        if response.count("<answer>") != 1 or response.count("</answer>") != 1:
-            return False
 
-        # Rule 3: Must have exactly one <think> and one </think>
-        if response.count("<think>") != 1 or response.count("</think>") != 1:
-            return False
+print(get_accuracy(predicted_data, ground_truths))
 
-        # Rule 4: Must have matching pairs of <state> and </state> (required, at least one)
-        if response.count("<state>") != response.count("</state>"):
-            return False
-        
-        # Rule 4a: Must have at least one <state> tag (states are required)
-        if response.count("<state>") == 0:
-            return False
+# print(f"Accuracy: {correct / total}")
 
-        # Rule 5: Find all tag positions
-        import re
-        reasoning_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
-        state_pattern = re.compile(r'<state>(.*?)</state>', re.DOTALL)
-        answer_pattern = re.compile(r'<answer>(.*?)</answer>', re.DOTALL)
+# import re
+# def get_length_of_state(data):
+#     avg_output_length = 0
+#     avg_state_length = 0
+#     avg_state = 0
+#     avg_think = 0
+#     for i in range(len(data)):
+#         output = data[i]['output']
+#         avg_output_length += get_token_length(output)
+#         ## extract all text between <state> and </state>
+#         state_strings = re.findall(r'<state>(.*?)</state>', output, re.DOTALL)
 
-        reasoning_matches = list(reasoning_pattern.finditer(response))
-        state_matches = list(state_pattern.finditer(response))
-        answer_matches = list(answer_pattern.finditer(response))
-
-        if len(reasoning_matches) != 1:
-            return False
-        
-        if len(answer_matches) != 1:
-            return False
-
-        reasoning_match = reasoning_matches[0]
-        answer_match = answer_matches[0]
-        
-        reasoning_start = reasoning_match.start()
-        reasoning_end = reasoning_match.end()
-        answer_start = answer_match.start()
-        answer_end = answer_match.end()
-
-        # Rule 6: <answer> must come after </think>
-        if answer_start < reasoning_end:
-            return False
-
-        # Rule 7: All <state> tags must be inside the <think> block
-        for state_match in state_matches:
-            state_start = state_match.start()
-            state_end = state_match.end()
-            # State must be completely inside the reasoning block
-            if state_start < reasoning_start or state_end > reasoning_end:
-                return False
-
-        # Rule 8: Verify reasoning block has non-empty content (excluding state tags)
-        reasoning_content = reasoning_match.group(1).strip()
-        if not reasoning_content:
-            return False
-
-        # Rule 9: Verify all state blocks have non-empty content (if any exist)
-        for match in state_matches:
-            content = match.group(1).strip()
-            if not content:
-                return False
-
-        # Rule 10: Verify answer has non-empty content
-        answer_content = answer_match.group(1).strip()
-        if not answer_content:
-            return False
-
-        # Rule 11: Verify there's no content between </think> and <answer>
-        between_content = response[reasoning_end:answer_start].strip()
-        if between_content:
-            return False
-
-        return True
-
-def compute_score(model_output: str, ground_truth):
-    final_reward = 0.0
-    format_reward = 0.0
-    state_reward = 0.0
-    correctness_reward = 0.0
-
+#         avg_state += output.count('<state>')
+#         avg_think += output.count('<think>')
+#         # Sum the lengths of all state strings (not just count them)
+#         avg_state_length += sum(get_token_length(s) for s in state_strings)
     
-    if checkFormat(model_output):
-        format_reward = 0.5
+#     avg_output_length /= len(data)
+#     avg_state_length /= len(data)
+#     avg_state /= len(data)
+#     avg_think /= len(data)
+#     return avg_output_length, avg_state_length, avg_state, avg_think
 
-        predicted_answer = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)[-1].strip()   
-        
-        correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth) 
+# base_data = get_data(base_path)
+# state_data = get_data(state_path)
 
-        if correctness_reward == 2.0:
-            correctness_reward = 1.0
-        else:
-            correctness_reward = 0.0
-        # Since states are now required, compute state reward
-        # Format check already ensures at least one state exists
-        intermediate_state_reward = intermediate_state_rewards(model_output)
-        
-        if len(intermediate_state_reward) == 0:
-            state_reward = 0.0
-            correctness_reward = 0.0
-        elif len(intermediate_state_reward) == 1:
-            state_reward = 0.1
-        elif len(intermediate_state_reward) >= 2:
-            state_reward = 0.25
-        
-        if len(intermediate_state_reward) >= 1:
-            state_reward += 0.5 * sum(intermediate_state_reward) / len(intermediate_state_reward)
+# base_output_length, base_state_length, base_state, base_think = get_length_of_state(base_data)
+# state_output_length, state_state_length, state_state, state_think = get_length_of_state(state_data)
 
-
-        
-    final_reward = format_reward + state_reward + correctness_reward
-
-    return {"score": final_reward, "format_reward": format_reward, "state_reward": state_reward, "correctness_reward": correctness_reward}
-    
-    
-
-
-# def compute_score(model_output: str, ground_truth):
-
-#     relaxed_format_reward = 0
-#     strict_format_reward = 0
-#     correctness_reward = 0
-#     state_reward = 0
-
-#     relaxed_format_reward = softFormatReward(model_output)
-#     strict_format_reward = hardFormatReward(model_output)
-
-
-#     answer_matches = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)
-#     predicted_answer = answer_matches[-1].strip() if answer_matches else ""  
-
-#     result = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth) 
-
-#     correctness_reward = result
-
-
-#     intermediate_state_reward = intermediate_state_rewards(model_output)
-#     if len(intermediate_state_reward) == 0:
-#         state_reward = 0
-#     else:
-#         state_reward = sum(intermediate_state_reward) / len(intermediate_state_reward)
-    
-#     final_reward = correctness_reward + relaxed_format_reward + strict_format_reward + state_reward
-
-#     return {"score": final_reward, "correctness_reward": correctness_reward, "format_reward": relaxed_format_reward + strict_format_reward, "state_reward": state_reward}
-
-
+# print(f"Base output length: {base_output_length}, Base state length: {base_state_length}")
+# print(f"State output length: {state_output_length}, State state length: {state_state_length}, State state: {state_state}, Base state: {base_state}, Base think: {base_think}, State think: {state_think}")

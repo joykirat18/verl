@@ -6,8 +6,8 @@ export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 export HUGGINGFACE_TOKEN='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'
 export HF_TOKEN='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'
 
-export CUDA_VISIBLE_DEVICES=8,9
-EXPERIMENT_NAME=qwen1_7b_blocksworld_with_state_inline_v1
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+EXPERIMENT_NAME=qwen1_7b_blocksworld_with_state_inline_v0
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=checkpoints/blocksworld/state_inline/$EXPERIMENT_NAME
 wandb_path=wandb/$EXPERIMENT_NAME
@@ -69,7 +69,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name='state-representation-reasoning' \
     trainer.experiment_name=${EXPERIMENT_NAME} \
-    trainer.n_gpus_per_node=2 \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.default_local_dir=${SAVE_PATH} \
     trainer.save_freq=50 \
