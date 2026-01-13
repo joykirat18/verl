@@ -818,11 +818,14 @@ filtered_data = []
 for i in range(len(data)):
     score = compute_score(data[i]['response'], ground_truths[i])
 
-    if score['correctness_reward'] == 1.0 and score['format_reward'] == 1.0:
+    if score['correctness_reward'] == 1.0 and score['format_reward'] == 1.0 and score['state_reward'] == 1.0:
         filtered_data.append(data[i])
 
 print(len(data))
 print(len(filtered_data))
+
+with open("/nas-ssd2/joykirat/code/state-representation/verl/apiTest/o4-mini_responses_with_state_action_train_filtered.json", "w") as f:
+    json.dump(filtered_data, f)
     
 
 
