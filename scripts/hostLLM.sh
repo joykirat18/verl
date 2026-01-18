@@ -3,6 +3,6 @@
 # export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 export HUGGINGFACE_TOKEN='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'
 export HF_TOKEN='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'
-CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507 \
+CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3-32B \
     --port 8005 \
     --tensor-parallel-size 2

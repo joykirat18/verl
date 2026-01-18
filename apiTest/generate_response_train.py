@@ -10,7 +10,7 @@ from typing import List, Dict, Optional
 
 
 test_data = "/home/joykirat18/verl/scripts/data/blocksworld_state_action/train.parquet"
-model = "Qwen3-30B-A3B-Thinking-2507"
+model = "Qwen3-32B"
 test_data = pd.read_parquet(test_data)
 
 # breakpoint()
@@ -90,7 +90,7 @@ def query_model(
     elif model == "gpt-oss-120b":
         max_tokens = 32000
         client = client_openai("https://joyki-mjn6s9tj-eastus2.services.ai.azure.com/openai/v1/", api_key)
-    elif model == "Qwen3-30B-A3B-Thinking-2507":
+    elif model == "Qwen3-32B":
         max_tokens = 32000
         # vLLM endpoint - defaults to localhost:8005 but can be overridden via env var
         vllm_endpoint = os.getenv("VLLM_ENDPOINT", "http://localhost:8005/v1")
@@ -113,18 +113,10 @@ def query_model(
                 temperature=1.0,
                 max_completion_tokens=max_tokens,
             )
-            elif model == "Qwen3-235B-A22B-Thinking-2507":
-                # vLLM uses max_tokens instead of max_completion_tokens
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=message,
-                    temperature=1.0,
-                    max_tokens=max_tokens,
-                )
-            elif model == "Qwen3-30B-A3B-Thinking-2507":
+            elif model == "Qwen3-32B":
                 # vLLM uses max_tokens instead of max_completion_tokens
                 # vLLM exposes the model with the namespace prefix from the serve command
-                model_name = "Qwen/Qwen3-30B-A3B-Thinking-2507"
+                model_name = "Qwen/Qwen3-32B"
                 response = client.chat.completions.create(
                     model=model_name,
                     messages=message,
