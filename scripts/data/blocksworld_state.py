@@ -76,7 +76,6 @@ put down the [block_name] block
 stack the [block_name] block on top of the [another_block_name] block
 
 State Representation:
-After each reasoning step, you must explicitly write the full state of the world.
 
 The state is written using the following predicates:
 on(X, Y): block X is on block Y or on the table
@@ -93,15 +92,20 @@ Here is the goal state of the blocks: {answer}.
 Show your work using the following format:
 
 <think>
-Explain your reasoning about how the blocks should be rearranged.
+Think step by step about the next valid action based on the current state.
 </think>
+
+<action>
+(one valid action)
+</action>
+
 <state>
 on(...)
 clear(...)
 holding(...) or handempty
 </state>
 
-You may repeat the <think> </think> tag as many times as needed. After each reasoning step, you may optionally include a <state> </state> tag to show the current state of the blocks. The state tag is optional but recommended.
+You may repeat the <think> </think> tag as many times as needed. After each reasoning step, you must include a valid <action> </action> tags and a <state> </state> tag to show the current state of the blocks.
 
 After completing your reasoning, provide the final sequence of actions in <answer> </answer> tags, for example:
 

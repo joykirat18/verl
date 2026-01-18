@@ -10,7 +10,7 @@ from typing import List, Dict, Optional
 
 
 test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action/eval.parquet"
-model = "o4-mini"
+model = "DeepSeek-R1"
 test_data = pd.read_parquet(test_data)
 
 # breakpoint()

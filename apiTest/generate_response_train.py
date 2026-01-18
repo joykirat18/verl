@@ -9,8 +9,8 @@ from openai import RateLimitError, APIConnectionError, APIError, APITimeoutError
 from typing import List, Dict, Optional
 
 
-test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action/train.parquet"
-model = "o4-mini"
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state/train.parquet"
+model = "gpt-oss-120b"
 test_data = pd.read_parquet(test_data)
 
 # breakpoint()
@@ -47,6 +47,7 @@ def client_openai(base_url, api_key):
     client = OpenAI(api_key=api_key, base_url=base_url)
 
     return client
+
 
 
 def query_model(
@@ -89,6 +90,13 @@ def query_model(
     elif model == "gpt-oss-120b":
         max_tokens = 32000
         client = client_openai("https://joyki-mjn6s9tj-eastus2.services.ai.azure.com/openai/v1/", api_key)
+    elif model == "Qwen3-235B-A22B-Thinking-2507":
+        max_tokens = 32000
+        # vLLM endpoint - defaults to localhost:8005 but can be overridden via env var
+        vllm_endpoint = os.getenv("VLLM_ENDPOINT", "http://localhost:8005/v1")
+        # vLLM uses OpenAI-compatible API, no API key required for localhost
+        vllm_api_key = os.getenv("VLLM_API_KEY", "EMPTY")
+        client = client_openai(vllm_endpoint, vllm_api_key)
     else:
         raise ValueError(f"Model {model} not supported")
 
@@ -105,6 +113,14 @@ def query_model(
                 temperature=1.0,
                 max_completion_tokens=max_tokens,
             )
+            elif model == "Qwen3-235B-A22B-Thinking-2507":
+                # vLLM uses max_tokens instead of max_completion_tokens
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=message,
+                    temperature=1.0,
+                    max_tokens=max_tokens,
+                )
             else:
                 response = client.chat.completions.create(
                     model=model,
