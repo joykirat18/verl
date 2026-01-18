@@ -94,9 +94,7 @@ Show your work using the following format:
 
 <think>
 
-<reasoning>
-Think step by step about the next valid step based on the current state.
-</reasoning>
+Think step by step about the next valid action based on the current state.
 
 <action>
 (one valid action)
@@ -108,9 +106,7 @@ clear(...)
 holding(...) or handempty
 </state>
 
-<reasoning>
 Think step by step about the next valid step based on the current state.
-</reasoning>
 
 <action>
 (one valid action)

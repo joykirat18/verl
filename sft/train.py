@@ -177,7 +177,7 @@ class SFTTrainingArguments(TrainingArguments):
         metadata={"help": "Enable gradient checkpointing to save memory"}
     )
     report_to: str = field(
-        default="tensorboard",
+        default="wandb",
         metadata={"help": "Reporting tool (tensorboard, wandb, none)"}
     )
     seed: int = field(
@@ -342,8 +342,9 @@ def preprocess_function(examples, tokenizer, max_seq_length, prompt_key="questio
         return_tensors=None,
     )
     
-    # Create labels (copy of input_ids for causal LM)
-    tokenized["labels"] = tokenized["input_ids"].copy()
+    # Create labels (deep copy of input_ids for causal LM)
+    # IMPORTANT: Must be a deep copy, not shallow copy!
+    tokenized["labels"] = [ids.copy() for ids in tokenized["input_ids"]]
     
     # Mask out prompt tokens in labels (we only want to train on the response)
     for i, (prompt, response) in enumerate(zip(prompts, responses)):
