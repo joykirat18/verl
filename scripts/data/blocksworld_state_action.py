@@ -90,11 +90,7 @@ The state must list all facts that are true. Any fact not listed is assumed to b
 Here is the initial state of the blocks: {question}
 Here is the goal state of the blocks: {answer}.
 
-Show your work using the following format:
-
-<think>
-
-Think step by step about the next valid action based on the current state.
+During the reasoning process, after each reasoning stepyou must first write the action that you took with the <action> tag and then write the state with the <state> tag. 
 
 <action>
 (one valid action)
@@ -105,20 +101,6 @@ on(...)
 clear(...)
 holding(...) or handempty
 </state>
-
-Think step by step about the next valid step based on the current state.
-
-<action>
-(one valid action)
-</action>
-
-<state>
-on(...)
-clear(...)
-holding(...) or handempty
-</state>
-
-</think>
 
 After reaching the goal state, provide the final sequence of actions in <answer> </answer> tags, for example:
 
@@ -128,9 +110,7 @@ put down the cyan block
 </answer>
 
 You must first write the action that you took with the <action> tag and then write the state with the <state> tag.
-All actions and states must be inside the <think> tag.
 Every action must be preceded by a reasoning step to determine the next action.
-All actions and states must be inside the <think> </think> tags.
 Do not output anything outside the specified tags.
 """
 

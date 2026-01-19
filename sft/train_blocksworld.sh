@@ -36,7 +36,7 @@ echo "SFT Training for Blocksworld State-Action"
 echo "========================================"
 echo "Using $NUM_GPUS GPU(s): $CUDA_VISIBLE_DEVICES"
 echo "Model: Qwen/Qwen3-1.7B"
-echo "Dataset: apiTest/o4-mini_responses_with_state_action_train_filtered.json"
+echo "Dataset: apiTest/gpt-oss-120b_responses_with_state_action_train_filtered_v2.json"
 echo "Wandb Project: $WANDB_PROJECT"
 echo "Wandb Run Name: $WANDB_RUN_NAME"
 echo "========================================"
@@ -46,7 +46,7 @@ cd "$(dirname "$0")/.."
 
 # Training arguments
 MODEL_NAME="Qwen/Qwen3-1.7B"
-TRAIN_FILE="apiTest/o4-mini_responses_with_state_action_train_filtered.json"
+TRAIN_FILE="apiTest/gpt-oss-120b_responses_with_state_action_train_filtered_v2.json"
 OUTPUT_DIR="checkpoints/blocksworld_state_action_sft"
 MAX_SEQ_LENGTH=""  # Leave empty for auto-detection from data
 BATCH_SIZE=1
@@ -57,6 +57,18 @@ WARMUP_RATIO=0.1
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
+
+
+
+WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
+if [ "$WANDB_API_KEY" != "None" ]; then
+    export WANDB_DIR=wandb/$WANDB_PROJECT
+    mkdir -p $WANDB_DIR
+    mkdir -p $WANDB_DIR/wandb
+    chmod -R u+w $WANDB_DIR
+    chmod -R u+w $WANDB_DIR/wandb
+    wandb login --relogin $WANDB_API_KEY
+fi
 
 # Optional: Validate data before training (uncomment to enable)
 # echo "Validating training data..."

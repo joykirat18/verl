@@ -9,8 +9,8 @@ from openai import RateLimitError, APIConnectionError, APIError, APITimeoutError
 from typing import List, Dict, Optional
 
 
-test_data = "/home/joykirat18/verl/scripts/data/blocksworld_state_action/train.parquet"
-model = "Qwen3-32B"
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld/train.parquet"
+model = "gpt-oss-120b"
 test_data = pd.read_parquet(test_data)
 
 # breakpoint()
@@ -130,14 +130,17 @@ def query_model(
                     temperature=1.0,
                     max_completion_tokens=max_tokens,
                 )
+            # breakpoint()
             content = response.choices[0].message.content
+            reasoning_content = response.choices[0].message.reasoning_content
             if content is None:
                 print(f"API response has no content for model {model}. This may indicate an error or empty response.")
                 content = "ERROR"
             raw_response = content.strip()
+            raw_reasoning_content = reasoning_content.strip()
             
             # Extract answer from <answer>...</answer> tags
-            return raw_response
+            return raw_response, raw_reasoning_content
                 
         except (RateLimitError, APIConnectionError, APITimeoutError) as e:
             # Retryable errors: rate limits, connection issues, timeouts
@@ -175,10 +178,10 @@ def query_model(
 
 import json
 final_responses = []
-if not os.path.exists(f'{model}_responses_with_state_action_train.json'):
+if not os.path.exists(f'{model}_responses_basic_blocksworld_train.json'):
     final_responses = []
 else:
-    with open(f'{model}_responses_with_state_action_train.json', 'r') as f:
+    with open(f'{model}_responses_basic_blocksworld_train.json', 'r') as f:
         final_responses = json.load(f)
 
 start_index = len(final_responses)
@@ -189,12 +192,12 @@ from tqdm import tqdm
 for i in tqdm(range(start_index, len(messages))):
     message = messages[i]
 
-    response = query_model(message, model)
+    response, reasoning_content = query_model(message, model)
 
-    final_responses.append({'question': message[0]['content'], 'response': response})
+    final_responses.append({'question': message[0]['content'], 'response': response, 'reasoning_content': reasoning_content})
 
     import json
-    with open(f'{model}_responses_with_state_action_train.json', 'w') as f:
+    with open(f'{model}_responses_basic_blocksworld_train.json', 'w') as f:
         json.dump(final_responses, f)
 
 

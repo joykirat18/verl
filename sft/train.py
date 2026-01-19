@@ -102,6 +102,10 @@ class DataArguments:
         default="response",
         metadata={"help": "Key for responses in the JSON data"}
     )
+    reasoning_key: str = field(
+        default="reasoning_content",
+        metadata={"help": "Key for reasoning contents in the JSON data"}
+    )
     preprocessing_num_workers: int = field(
         default=4,
         metadata={"help": "Number of processes for data preprocessing"}
@@ -186,13 +190,14 @@ class SFTTrainingArguments(TrainingArguments):
     )
 
 
-def load_json_dataset(file_path: str, prompt_key: str = "question", response_key: str = "response"):
+def load_json_dataset(file_path: str, prompt_key: str = "question", response_key: str = "response", reasoning_key: str = "reasoning_content"):
     """Load dataset from JSON file.
     
     Args:
         file_path: Path to JSON file
         prompt_key: Key for prompts in the data
         response_key: Key for responses in the data
+        reasoning_key: Key for reasoning contents in the data
         
     Returns:
         Dataset object
@@ -210,8 +215,8 @@ def load_json_dataset(file_path: str, prompt_key: str = "question", response_key
     dataset = Dataset.from_list(data)
     
     # Verify required keys exist
-    if prompt_key not in dataset.column_names or response_key not in dataset.column_names:
-        raise ValueError(f"Dataset must contain '{prompt_key}' and '{response_key}' columns. Found: {dataset.column_names}")
+    if prompt_key not in dataset.column_names or response_key not in dataset.column_names or reasoning_key not in dataset.column_names:
+        raise ValueError(f"Dataset must contain '{prompt_key}', '{response_key}' and '{reasoning_key}' columns. Found: {dataset.column_names}")
     
     logger.info(f"Loaded {len(dataset)} examples")
     return dataset
@@ -222,6 +227,7 @@ def calculate_optimal_max_seq_length(
     tokenizer,
     prompt_key: str = "question",
     response_key: str = "response",
+    reasoning_key: str = "reasoning_content",
     percentile: float = 99.5,
     buffer: int = 128,
     sample_size: int = 1000,
@@ -233,6 +239,7 @@ def calculate_optimal_max_seq_length(
         tokenizer: Tokenizer to use for length calculation
         prompt_key: Key for prompts in the data
         response_key: Key for responses in the data
+        reasoning_key: Key for reasoning contents in the data
         percentile: Percentile to use (e.g., 99.5 means 99.5% of sequences will fit)
         buffer: Additional tokens to add as buffer
         sample_size: Number of examples to sample for calculation (None = use all)
@@ -258,6 +265,7 @@ def calculate_optimal_max_seq_length(
     for example in sample_dataset:
         prompt = example[prompt_key]
         response = example[response_key]
+        reasoning_content = example[reasoning_key]
         
         # Format with chat template
         messages = [{"role": "user", "content": prompt}]
@@ -268,9 +276,11 @@ def calculate_optimal_max_seq_length(
         )
         
         # Combine prompt and response
-        full_text = prompt_text + response + tokenizer.eos_token
+        full_text = prompt_text + "<think>" + reasoning_content + "</think>" + response + tokenizer.eos_token
         
         # Tokenize and get length
+        # print(full_text)
+        # breakpoint()
         tokens = tokenizer(full_text, add_special_tokens=False)
         length = len(tokens["input_ids"])
         lengths.append(length)
@@ -300,7 +310,7 @@ def calculate_optimal_max_seq_length(
     return optimal_length
 
 
-def preprocess_function(examples, tokenizer, max_seq_length, prompt_key="question", response_key="response"):
+def preprocess_function(examples, tokenizer, max_seq_length, prompt_key="question", response_key="response", reasoning_key="reasoning_content"):
     """Preprocess examples for SFT training.
     
     Args:
@@ -315,10 +325,11 @@ def preprocess_function(examples, tokenizer, max_seq_length, prompt_key="questio
     """
     prompts = examples[prompt_key]
     responses = examples[response_key]
+    reasoning_contents = examples[reasoning_key]
     
     # Format with chat template
     formatted_texts = []
-    for prompt, response in zip(prompts, responses):
+    for prompt, response, reasoning_content in zip(prompts, responses, reasoning_contents):
         # Create messages
         messages = [{"role": "user", "content": prompt}]
         
@@ -330,7 +341,7 @@ def preprocess_function(examples, tokenizer, max_seq_length, prompt_key="questio
         )
         
         # Combine prompt and response
-        full_text = prompt_text + response + tokenizer.eos_token
+        full_text = prompt_text + "<think>" + reasoning_content + "</think>" + response + tokenizer.eos_token
         formatted_texts.append(full_text)
     
     # Tokenize
@@ -347,7 +358,7 @@ def preprocess_function(examples, tokenizer, max_seq_length, prompt_key="questio
     tokenized["labels"] = [ids.copy() for ids in tokenized["input_ids"]]
     
     # Mask out prompt tokens in labels (we only want to train on the response)
-    for i, (prompt, response) in enumerate(zip(prompts, responses)):
+    for i, (prompt, response, reasoning_content) in enumerate(zip(prompts, responses, reasoning_contents)):
         messages = [{"role": "user", "content": prompt}]
         prompt_text = tokenizer.apply_chat_template(
             messages,
@@ -420,14 +431,16 @@ def main():
     train_dataset = load_json_dataset(
         data_args.train_file,
         prompt_key=data_args.prompt_key,
-        response_key=data_args.response_key
+        response_key=data_args.response_key,
+        reasoning_key=data_args.reasoning_key
     )
     
     if data_args.validation_file:
         eval_dataset = load_json_dataset(
             data_args.validation_file,
             prompt_key=data_args.prompt_key,
-            response_key=data_args.response_key
+            response_key=data_args.response_key,
+            reasoning_key=data_args.reasoning_key
         )
     else:
         # Split training data for validation
@@ -449,6 +462,7 @@ def main():
             tokenizer=tokenizer,
             prompt_key=data_args.prompt_key,
             response_key=data_args.response_key,
+            reasoning_key=data_args.reasoning_key,
             percentile=data_args.max_seq_length_percentile,
             buffer=data_args.max_seq_length_buffer,
             sample_size=1000,  # Sample 1000 examples for efficiency
@@ -465,7 +479,8 @@ def main():
             tokenizer,
             data_args.max_seq_length,
             data_args.prompt_key,
-            data_args.response_key
+            data_args.response_key,
+            data_args.reasoning_key
         ),
         batched=True,
         num_proc=data_args.preprocessing_num_workers,
@@ -479,7 +494,8 @@ def main():
             tokenizer,
             data_args.max_seq_length,
             data_args.prompt_key,
-            data_args.response_key
+            data_args.response_key,
+            data_args.reasoning_key
         ),
         batched=True,
         num_proc=data_args.preprocessing_num_workers,

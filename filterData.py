@@ -372,21 +372,13 @@ def softFormatReward(text):
     count = 0.0
     max_score = 0.5
     
-    # Check for matching redacted_reasoning tags
-    if text.count('<think>') == text.count('</think>') and text.count('<think>') > 0:
-        count += 0.1
-    
-    # Check for matching reasoning tags
-    if text.count('<reasoning>') == text.count('</reasoning>') and text.count('<reasoning>') > 0:
-        count += 0.1
-    
     # Check for matching action tags
     if text.count('<action>') == text.count('</action>') and text.count('<action>') > 0:
-        count += 0.1
+        count += 0.2
     
     # Check for matching state tags
     if text.count('<state>') == text.count('</state>') and text.count('<state>') > 0:
-        count += 0.1
+        count += 0.2
     
     # Check for answer tags
     if text.count('<answer>') == 1 and text.count('</answer>') == 1:
@@ -395,39 +387,54 @@ def softFormatReward(text):
     return min(count, max_score)
 
 def hardFormatReward(text: str) -> tuple[bool, str]:
+    """
+    Hard format reward - checks for basic structure: action, state pairs, then answer.
+    Returns 0.5 if format is correct, 0 otherwise.
+    """
+    if text.count('<action>') == 0 or text.count('</action>') == 0:
+        return 0
 
-
-    if text.count('<think>') == 0 or text.count('</think>') == 0:
+    if text.count('<state>') == 0 or text.count('</state>') == 0:
         return 0
 
     if text.count('<answer>') != 1 or text.count('</answer>') != 1:
         return 0
 
-    # check the order of search/result
+    # Check that number of actions equals number of states
+    if text.count('<action>') != text.count('<state>'):
+        return 0
+
+    # Check the order: action, state (repeated), then answer
     current_pos = 0
     while True:
-        think_pos = text.find('<think>', current_pos)
-        if think_pos == -1:
+        action_pos = text.find('<action>', current_pos)
+        if action_pos == -1:
             break
-        think_end_pos = text.find('</think>', think_pos)
-        if think_end_pos == -1:
+        action_end_pos = text.find('</action>', action_pos)
+        if action_end_pos == -1:
             return 0
 
-        state_pos = text.find('<state>', think_pos)
+        state_pos = text.find('<state>', action_end_pos)
         if state_pos == -1:
-            break
+            return 0
 
         state_end_pos = text.find('</state>', state_pos)
         if state_end_pos == -1:
             return 0
 
-        if not (think_pos < think_end_pos < state_pos < state_end_pos):
+        if not (action_pos < action_end_pos < state_pos < state_end_pos):
             return 0
         current_pos = state_end_pos
 
     answer_start = text.find('<answer>')
     answer_end = text.find('</answer>')
+    if answer_start == -1 or answer_end == -1:
+        return 0
     if answer_start > answer_end:
+        return 0
+    
+    # Verify answer comes after all action/state pairs
+    if current_pos > 0 and answer_start < current_pos:
         return 0
     
     return 0.5
@@ -564,55 +571,37 @@ def intermediate_state_rewards(model_output: str):
 def checkFormat(response):
         response = response.strip()
 
-        # Rule 1: Must start with <think> and end with </answer>
-        if not response.startswith("<think>") or not response.endswith("</answer>"):
+        # Rule 1: Must end with </answer>
+        if not response.endswith("</answer>"):
             return False
 
         # Rule 2: Must have exactly one <answer> and one </answer>
         if response.count("<answer>") != 1 or response.count("</answer>") != 1:
             return False
 
-        # Rule 3: Must have matching pairs of <think> and </think> (at least one)
-        if response.count("<think>") != response.count("</think>"):
-            return False
-        if response.count("<think>") == 0:
-            return False
-
-        # Rule 4: Must have matching pairs of <reasoning> and </reasoning> (at least one)
-        if response.count("<reasoning>") != response.count("</reasoning>"):
-            return False
-        if response.count("<reasoning>") == 0:
-            return False
-
-        # Rule 5: Must have matching pairs of <action> and </action> (at least one)
+        # Rule 3: Must have matching pairs of <action> and </action> (at least one)
         if response.count("<action>") != response.count("</action>"):
             return False
         if response.count("<action>") == 0:
             return False
 
-        # Rule 6: Must have matching pairs of <state> and </state> (required, at least one)
+        # Rule 4: Must have matching pairs of <state> and </state> (required, at least one)
         if response.count("<state>") != response.count("</state>"):
             return False
         if response.count("<state>") == 0:
             return False
 
-        # Rule 7: Number of reasoning, actions, and states must all be equal
-        # (each reasoning must be followed by an action, which is followed by a state)
-        if response.count("<reasoning>") != response.count("<action>"):
-            return False
+        # Rule 5: Number of actions and states must be equal
+        # (each action must be followed by a state)
         if response.count("<action>") != response.count("<state>"):
             return False
 
-        # Rule 8: Find all tag positions
+        # Rule 6: Find all tag positions
         import re
-        redacted_reasoning_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
-        reasoning_pattern = re.compile(r'<reasoning>(.*?)</reasoning>', re.DOTALL)
         action_pattern = re.compile(r'<action>(.*?)</action>', re.DOTALL)
         state_pattern = re.compile(r'<state>(.*?)</state>', re.DOTALL)
         answer_pattern = re.compile(r'<answer>(.*?)</answer>', re.DOTALL)
 
-        redacted_reasoning_matches = list(redacted_reasoning_pattern.finditer(response))
-        reasoning_matches = list(reasoning_pattern.finditer(response))
         action_matches = list(action_pattern.finditer(response))
         state_matches = list(state_pattern.finditer(response))
         answer_matches = list(answer_pattern.finditer(response))
@@ -624,45 +613,17 @@ def checkFormat(response):
         answer_start = answer_match.start()
         answer_end = answer_match.end()
 
-        # Rule 9: <answer> must come after all reasoning/action/state blocks
-        for match in redacted_reasoning_matches:
-            if match.end() > answer_start:
-                return False
-        for match in reasoning_matches:
-            if match.end() > answer_start:
-                return False
+        # Rule 7: <answer> must come after all action/state blocks
         for action_match in action_matches:
             if action_match.end() > answer_start:
                 return False
         for state_match in state_matches:
             if state_match.end() > answer_start:
                 return False
-
-        # Rule 10: Verify the pattern: all reasoning/action/state are inside <think>
-        # There should be exactly one redacted_reasoning block that contains all reasoning/action/state
-        if len(redacted_reasoning_matches) != 1:
-            return False
         
-        redacted_reasoning_match = redacted_reasoning_matches[0]
-        redacted_reasoning_start = redacted_reasoning_match.start()
-        redacted_reasoning_end = redacted_reasoning_match.end()
-        
-        # All reasoning, action, and state tags must be inside the redacted_reasoning block
-        for match in reasoning_matches:
-            if match.start() < redacted_reasoning_start or match.end() > redacted_reasoning_end:
-                return False
-        for action_match in action_matches:
-            if action_match.start() < redacted_reasoning_start or action_match.end() > redacted_reasoning_end:
-                return False
-        for state_match in state_matches:
-            if state_match.start() < redacted_reasoning_start or state_match.end() > redacted_reasoning_end:
-                return False
-        
-        # Rule 11: Verify the pattern: reasoning, action, state (repeated) inside redacted_reasoning
-        # All tags must appear in the correct order: reasoning, action, state, reasoning, action, state, ...
+        # Rule 8: Verify the pattern: action, state (repeated pairs)
+        # All tags must appear in the correct order: action, state, action, state, ...
         all_tags = []
-        for match in reasoning_matches:
-            all_tags.append(('reasoning', match.start(), match.end()))
         for match in action_matches:
             all_tags.append(('action', match.start(), match.end()))
         for match in state_matches:
@@ -670,57 +631,50 @@ def checkFormat(response):
         
         all_tags.sort(key=lambda x: x[1])  # Sort by start position
 
-        # Check that we have the pattern: reasoning, action, state (repeated)
+        # Check that we have the pattern: action, state (repeated)
         if len(all_tags) == 0:
-            return False  # Must have at least one triplet
+            return False  # Must have at least one pair
         
         i = 0
         while i < len(all_tags):
-            # Each triplet should be: reasoning, action, state
-            if i + 2 >= len(all_tags):
-                return False  # Not enough tags for a complete triplet
+            # Each pair should be: action, state
+            if i + 1 >= len(all_tags):
+                return False  # Not enough tags for a complete pair
             
-            if all_tags[i][0] != 'reasoning':
+            if all_tags[i][0] != 'action':
                 return False
-            if all_tags[i+1][0] != 'action':
-                return False
-            if all_tags[i+2][0] != 'state':
+            if all_tags[i+1][0] != 'state':
                 return False
             
-            # Verify order: reasoning ends before action starts, action ends before state starts
-            if all_tags[i][2] > all_tags[i+1][1] or all_tags[i+1][2] > all_tags[i+2][1]:
+            # Verify order: action ends before state starts
+            if all_tags[i][2] > all_tags[i+1][1]:
                 return False
             
-            i += 3
+            i += 2
 
-        # Rule 12: Verify all reasoning blocks have non-empty content
-        for match in reasoning_matches:
-            content = match.group(1).strip()
-            if not content:
-                return False
-
-        # Rule 13: Verify all action blocks have non-empty content
+        # Rule 9: Verify all action blocks have non-empty content
         for match in action_matches:
             content = match.group(1).strip()
             if not content:
                 return False
 
-        # Rule 14: Verify all state blocks have non-empty content
+        # Rule 10: Verify all state blocks have non-empty content
         for match in state_matches:
             content = match.group(1).strip()
             if not content:
                 return False
 
-        # Rule 15: Verify answer has non-empty content
+        # Rule 11: Verify answer has non-empty content
         answer_content = answer_match.group(1).strip()
         if not answer_content:
             return False
 
-        # Rule 16: Verify there's no content between redacted_reasoning block end and <answer>
-        redacted_reasoning_end = redacted_reasoning_matches[0].end()
-        between_content = response[redacted_reasoning_end:answer_start].strip()
-        if between_content:
-            return False
+        # Rule 12: Verify there's no content between last state block end and <answer>
+        if len(state_matches) > 0:
+            last_state_end = max(match.end() for match in state_matches)
+            between_content = response[last_state_end:answer_start].strip()
+            if between_content:
+                return False
 
         return True
 
@@ -732,11 +686,11 @@ def compute_score(model_output: str, ground_truth):
     actual_correctness_reward = 0.0
 
     # Always compute relaxed format reward (gives partial credit)
-    format_reward = softFormatReward(model_output)
+    # format_reward = softFormatReward(model_output)
     
     # Compute strict format reward (only if format is perfect)
     if checkFormat(model_output):
-        format_reward += 0.5
+        format_reward = 1.0
 
     # Try to extract answer and compute correctness reward (even if format fails)
     answer_matches = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)
@@ -810,7 +764,7 @@ def get_accuracy(predicted_data, ground_truths):
     return correct / total
 
 
-data_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/o4-mini_responses_with_state_action_train.json"
+data_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/gpt-oss-120b_responses_with_state_action_train_v2.json"
 
 data = get_data(data_path)
 filtered_data = []
@@ -824,7 +778,7 @@ for i in range(len(data)):
 print(len(data))
 print(len(filtered_data))
 
-with open("/nas-ssd2/joykirat/code/state-representation/verl/apiTest/o4-mini_responses_with_state_action_train_filtered.json", "w") as f:
+with open("/nas-ssd2/joykirat/code/state-representation/verl/apiTest/gpt-oss-120b_responses_with_state_action_train_filtered_v2.json", "w") as f:
     json.dump(filtered_data, f)
     
 
