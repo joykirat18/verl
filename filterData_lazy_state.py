@@ -1,4 +1,3 @@
-
 import re
 import sympy
 import logging
@@ -7,7 +6,7 @@ from functools import partial, update_wrapper
 import signal
 import json
 from typing import List
-
+import pandas as pd
 
 class BlocksworldCorrectnessReward:
     @staticmethod
@@ -363,6 +362,8 @@ class BlocksworldCorrectnessReward:
             print(f'Error in computing BW verifier reward - {e}')
             return 0.0
 
+# correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth)
+
 def softFormatReward(text):
     """
     Relaxed format reward that gives partial credit for matching tags.
@@ -371,21 +372,13 @@ def softFormatReward(text):
     count = 0.0
     max_score = 0.5
     
-    # Check for matching redacted_reasoning tags
-    if text.count('<think>') == text.count('</think>') and text.count('<think>') > 0:
-        count += 0.1
-    
-    # Check for matching reasoning tags
-    if text.count('<reasoning>') == text.count('</reasoning>') and text.count('<reasoning>') > 0:
-        count += 0.1
-    
     # Check for matching action tags
     if text.count('<action>') == text.count('</action>') and text.count('<action>') > 0:
-        count += 0.1
+        count += 0.2
     
     # Check for matching state tags
     if text.count('<state>') == text.count('</state>') and text.count('<state>') > 0:
-        count += 0.1
+        count += 0.2
     
     # Check for answer tags
     if text.count('<answer>') == 1 and text.count('</answer>') == 1:
@@ -394,39 +387,54 @@ def softFormatReward(text):
     return min(count, max_score)
 
 def hardFormatReward(text: str) -> tuple[bool, str]:
+    """
+    Hard format reward - checks for basic structure: action, state pairs, then answer.
+    Returns 0.5 if format is correct, 0 otherwise.
+    """
+    if text.count('<action>') == 0 or text.count('</action>') == 0:
+        return 0
 
-
-    if text.count('<think>') == 0 or text.count('</think>') == 0:
+    if text.count('<state>') == 0 or text.count('</state>') == 0:
         return 0
 
     if text.count('<answer>') != 1 or text.count('</answer>') != 1:
         return 0
 
-    # check the order of search/result
+    # Check that number of actions equals number of states
+    if text.count('<action>') != text.count('<state>'):
+        return 0
+
+    # Check the order: action, state (repeated), then answer
     current_pos = 0
     while True:
-        think_pos = text.find('<think>', current_pos)
-        if think_pos == -1:
+        action_pos = text.find('<action>', current_pos)
+        if action_pos == -1:
             break
-        think_end_pos = text.find('</think>', think_pos)
-        if think_end_pos == -1:
+        action_end_pos = text.find('</action>', action_pos)
+        if action_end_pos == -1:
             return 0
 
-        state_pos = text.find('<state>', think_pos)
+        state_pos = text.find('<state>', action_end_pos)
         if state_pos == -1:
-            break
+            return 0
 
         state_end_pos = text.find('</state>', state_pos)
         if state_end_pos == -1:
             return 0
 
-        if not (think_pos < think_end_pos < state_pos < state_end_pos):
+        if not (action_pos < action_end_pos < state_pos < state_end_pos):
             return 0
         current_pos = state_end_pos
 
     answer_start = text.find('<answer>')
     answer_end = text.find('</answer>')
+    if answer_start == -1 or answer_end == -1:
+        return 0
     if answer_start > answer_end:
+        return 0
+    
+    # Verify answer comes after all action/state pairs
+    if current_pos > 0 and answer_start < current_pos:
         return 0
     
     return 0.5
@@ -684,6 +692,7 @@ def compute_score(model_output: str, ground_truth):
     if checkFormat(model_output):
         format_reward = 1.0
 
+    # Try to extract answer and compute correctness reward (even if format fails)
     answer_matches = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)
     if answer_matches:
         predicted_plan = answer_matches[-1].strip()
@@ -696,12 +705,12 @@ def compute_score(model_output: str, ground_truth):
             else:
                 actual_correctness_reward = 0.0
     
-        # Compute state reward (even if format fails)
-        intermediate_state_reward = intermediate_state_rewards(model_output)
-        if len(intermediate_state_reward) > 0:
-            state_reward = sum(intermediate_state_reward) / len(intermediate_state_reward)
+    # Compute state reward (even if format fails)
+    # intermediate_state_reward = intermediate_state_rewards(model_output)
+    # if len(intermediate_state_reward) > 0:
+    #     state_reward = sum(intermediate_state_reward) / len(intermediate_state_reward)
 
-    final_reward = format_reward + state_reward + correctness_reward
+    final_reward = format_reward + correctness_reward
 
     return {
         "score": final_reward, 
@@ -709,37 +718,131 @@ def compute_score(model_output: str, ground_truth):
         "state_reward": state_reward, 
         "correctness_reward": actual_correctness_reward
     }
+
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action_lazy/train.parquet"
+
+test_data = pd.read_parquet(test_data)
+
+ground_truths = []
+
+for i in range(len(test_data)):
+    ground_truths.append(test_data['reward_model'][i]['ground_truth'])
+
+
+predicted_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/gpt-oss-120b_responses_state_action_lazy_train.json"
+# "/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state/qwen1_7b_blocksworld_with_state_v1/val_rollout/800.jsonl"
+
+def get_data(path):
+    # data = []
+    # with open(path, "r") as f:
+    #     for line in f:
+    #         data.append(json.loads(line))
+    data = []
+    with open(path, "r") as f:
+        data = json.load(f)
+    return data
+
+def get_accuracy(predicted_data, ground_truths):
+    correct = 0
+    total = 0
+
+    for i in range(len(predicted_data)):
+        ground_truth = ground_truths[i]
+        model_output = predicted_data[i]['response']
+        total += 1
+        try:
+            predicted_answer = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)[-1].strip()
+        except Exception as e:
+            print(f"Error in parsing predicted answer - {e}")
+            continue
+
+        reward = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth)
+        if reward > 0.0:
+            correct += 1
+        
     
+    return correct / total
+
+
+data_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/gpt-oss-120b_responses_state_action_lazy_train.json"
+
+data = get_data(data_path)
+filtered_data = []
+
+for i in range(len(data)):
+    score = compute_score(data[i]['response'], ground_truths[i])
+
+    if score['correctness_reward'] == 1.0 and score['format_reward'] == 1.0:
+        filtered_data.append(data[i])
+
+print(len(data))
+print(len(filtered_data))
+
+with open("/nas-ssd2/joykirat/code/state-representation/verl/apiTest/gpt-oss-120b_responses_state_action_lazy_train_filtered.json", "w") as f:
+    json.dump(filtered_data, f)
     
 
 
-# def compute_score(model_output: str, ground_truth):
+# better_than_prediction = 0
+# from tqdm import tqdm
+# for i in tqdm(range(0, 900, 10)):
+#     predicted_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/base/qwen1_7b_blocksworld_correctness_only_v0/val_rollout/{i}.jsonl"
+#     state_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state/qwen1_7b_blocksworld_with_state_v1/val_rollout/{i}.jsonl"
+#     inline_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state_inline/qwen1_7b_blocksworld_with_state_inline_v0/val_rollout/{i}.jsonl"
 
-#     relaxed_format_reward = 0
-#     strict_format_reward = 0
-#     correctness_reward = 0
-#     state_reward = 0
+#     predicted_data = get_data(predicted_path)
+#     state_data = get_data(state_path)
+#     inline_data = get_data(inline_path)
 
-#     relaxed_format_reward = softFormatReward(model_output)
-#     strict_format_reward = hardFormatReward(model_output)
+#     prediction_accuracy = get_accuracy(predicted_data, ground_truths)
+#     state_accuracy = get_accuracy(state_data, ground_truths)
+#     inline_accuracy = get_accuracy(inline_data, ground_truths)
 
+#     if inline_accuracy > prediction_accuracy:
+#         print(f"Inline accuracy is better than prediction accuracy for {i}")
+#         better_than_prediction += 1
 
-#     answer_matches = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)
-#     predicted_answer = answer_matches[-1].strip() if answer_matches else ""  
-
-#     result = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth) 
-
-#     correctness_reward = result
+# print(f"Better than prediction: {better_than_prediction}")
 
 
-#     intermediate_state_reward = intermediate_state_rewards(model_output)
-#     if len(intermediate_state_reward) == 0:
-#         state_reward = 0
-#     else:
-#         state_reward = sum(intermediate_state_reward) / len(intermediate_state_reward)
+
+# predicted_path = f"/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state_inline/qwen1_7b_blocksworld_with_state_inline_v0/val_rollout/900.jsonl"
+
+# predicted_data = get_data(predicted_path)
+
+
+# print(get_accuracy(predicted_data, ground_truths))
+
+# print(f"Accuracy: {correct / total}")
+
+# import re
+# def get_length_of_state(data):
+#     avg_output_length = 0
+#     avg_state_length = 0
+#     avg_state = 0
+#     avg_think = 0
+#     for i in range(len(data)):
+#         output = data[i]['output']
+#         avg_output_length += get_token_length(output)
+#         ## extract all text between <state> and </state>
+#         state_strings = re.findall(r'<state>(.*?)</state>', output, re.DOTALL)
+
+#         avg_state += output.count('<state>')
+#         avg_think += output.count('<think>')
+#         # Sum the lengths of all state strings (not just count them)
+#         avg_state_length += sum(get_token_length(s) for s in state_strings)
     
-#     final_reward = correctness_reward + relaxed_format_reward + strict_format_reward + state_reward
+#     avg_output_length /= len(data)
+#     avg_state_length /= len(data)
+#     avg_state /= len(data)
+#     avg_think /= len(data)
+#     return avg_output_length, avg_state_length, avg_state, avg_think
 
-#     return {"score": final_reward, "correctness_reward": correctness_reward, "format_reward": relaxed_format_reward + strict_format_reward, "state_reward": state_reward}
+# base_data = get_data(base_path)
+# state_data = get_data(state_path)
 
+# base_output_length, base_state_length, base_state, base_think = get_length_of_state(base_data)
+# state_output_length, state_state_length, state_state, state_think = get_length_of_state(state_data)
 
+# print(f"Base output length: {base_output_length}, Base state length: {base_state_length}")
+# print(f"State output length: {state_output_length}, State state length: {state_state_length}, State state: {state_state}, Base state: {base_state}, Base think: {base_think}, State think: {state_think}")

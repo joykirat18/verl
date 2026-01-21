@@ -9,7 +9,7 @@ from openai import RateLimitError, APIConnectionError, APIError, APITimeoutError
 from typing import List, Dict, Optional
 
 
-test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld/train.parquet"
+test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action_lazy/train.parquet"
 model = "gpt-oss-120b"
 test_data = pd.read_parquet(test_data)
 
@@ -89,7 +89,7 @@ def query_model(
         client = client_openai("https://joykirat-api.services.ai.azure.com/openai/v1/", api_key)
     elif model == "gpt-oss-120b":
         max_tokens = 32000
-        client = client_openai("https://joyki-mjn6s9tj-eastus2.services.ai.azure.com/openai/v1/", api_key)
+        client = client_openai("https://joykiratsingh-api.services.ai.azure.com/openai/v1/", api_key)
     elif model == "Qwen3-32B":
         max_tokens = 32000
         # vLLM endpoint - defaults to localhost:8005 but can be overridden via env var
@@ -178,10 +178,10 @@ def query_model(
 
 import json
 final_responses = []
-if not os.path.exists(f'{model}_responses_basic_blocksworld_train.json'):
+if not os.path.exists(f'{model}_responses_state_action_lazy_train.json'):
     final_responses = []
 else:
-    with open(f'{model}_responses_basic_blocksworld_train.json', 'r') as f:
+    with open(f'{model}_responses_state_action_lazy_train.json', 'r') as f:
         final_responses = json.load(f)
 
 start_index = len(final_responses)
@@ -197,7 +197,7 @@ for i in tqdm(range(start_index, len(messages))):
     final_responses.append({'question': message[0]['content'], 'response': response, 'reasoning_content': reasoning_content})
 
     import json
-    with open(f'{model}_responses_basic_blocksworld_train.json', 'w') as f:
+    with open(f'{model}_responses_state_action_lazy_train.json', 'w') as f:
         json.dump(final_responses, f)
 
 

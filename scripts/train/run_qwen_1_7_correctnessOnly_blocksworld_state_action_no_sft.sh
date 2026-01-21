@@ -6,8 +6,8 @@ export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 export HUGGINGFACE_TOKEN='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'
 export HF_TOKEN='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'
 
-export CUDA_VISIBLE_DEVICES=3,5,6,7
-EXPERIMENT_NAME=qwen1_7b_blocksworld_with_state_action_sft_state_reward_v0
+export CUDA_VISIBLE_DEVICES=0,1
+EXPERIMENT_NAME=qwen_4b_blocksworld_with_state_action_v0
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=checkpoints/blocksworld/state_action/$EXPERIMENT_NAME
 wandb_path=wandb/$EXPERIMENT_NAME
@@ -33,7 +33,7 @@ python3 -m verl.trainer.main_ppo \
     data.shuffle=False \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
-    actor_rollout_ref.model.path=/nas-ssd2/joykirat/code/state-representation/verl/checkpoints/blocksworld_state_action_sft \
+    actor_rollout_ref.model.path=Qwen/Qwen3-1.7B \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
