@@ -1,13 +1,13 @@
 set -x
 
-export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
-export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
-export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
+# export HF_HOME="/nas-ssd2/joykirat/.cache/huggingface"
+# export UV_CACHE_DIR="/nas-ssd2/joykirat/.cache/uv"
+# export RAY_TMPDIR="/nas-ssd2/joykirat/tmp_ray"
 export HUGGINGFACE_TOKEN='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'
 export HF_TOKEN='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'
 
-export CUDA_VISIBLE_DEVICES=3,5,6,7
-EXPERIMENT_NAME=qwen1_7b_blocksworld_with_state_action_sft_state_reward_v0
+export CUDA_VISIBLE_DEVICES=0,1
+EXPERIMENT_NAME=qwen1_7b_blocksworld_with_state_action_sft_state_reward_2_gpu_v5
 WANDB_API_KEY='c8f694b1460eaf8f06beec994e5aa1bb56183688'
 SAVE_PATH=checkpoints/blocksworld/state_action/$EXPERIMENT_NAME
 wandb_path=wandb/$EXPERIMENT_NAME
@@ -21,24 +21,24 @@ if [ "$WANDB_API_KEY" != "None" ]; then
 fi
 
 BATCH_SIZE=8
-MICRO_BATCH_SIZE=4
+MICRO_BATCH_SIZE=2
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
-    data.train_files=/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action/train.parquet \
-    data.val_files=/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_action/eval.parquet \
+    data.train_files=/home/joykirat18/verl/scripts/data/blocksworld_state_action/train.parquet \
+    data.val_files=/home/joykirat18/verl/scripts/data/blocksworld_state_action/eval.parquet \
     data.train_batch_size=$BATCH_SIZE \
     data.max_prompt_length=1024 \
     data.max_response_length=7000 \
     data.shuffle=False \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
-    actor_rollout_ref.model.path=/nas-ssd2/joykirat/code/state-representation/verl/checkpoints/blocksworld_state_action_sft \
+    actor_rollout_ref.model.path=/home/joykirat18/verl/checkpoints/blocksworld_state_action_sft \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=$BATCH_SIZE \
+    actor_rollout_ref.actor.ppo_mini_batch_size=$((BATCH_SIZE / 2)) \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=$MICRO_BATCH_SIZE \
     actor_rollout_ref.actor.clip_ratio_low=0.2 \
     actor_rollout_ref.actor.clip_ratio_high=0.28 \
@@ -69,10 +69,10 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name='state-representation-reasoning' \
     trainer.experiment_name=${EXPERIMENT_NAME} \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
     trainer.default_local_dir=${SAVE_PATH} \
     trainer.save_freq=50 \
-    trainer.test_freq=10 \
-    trainer.val_before_train=True \
+    trainer.test_freq=100 \
+    trainer.val_before_train=False \
     trainer.total_epochs=2 $@

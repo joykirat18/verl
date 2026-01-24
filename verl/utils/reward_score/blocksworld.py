@@ -403,26 +403,41 @@ def checkFormat(response):
         return True
 
 def compute_score(model_output: str, ground_truth):
-
-
     final_reward = 0.0
     format_reward = 0.0
+    state_reward = 0.0
     correctness_reward = 0.0
+    actual_correctness_reward = 0.0
 
+    # Always compute relaxed format reward (gives partial credit)
+    # format_reward = softFormatReward(model_output)
     
-    if checkFormat(model_output):
-        format_reward = 0.5
+    # Compute strict format reward (only if format is perfect)
+    # if checkFormat(model_output):
+        # format_reward += 0.5
 
-        predicted_answer = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)[-1].strip()   
-        
-        correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_answer, ground_truth) 
+    answer_matches = re.findall(r'<answer>\s*(.*?)\s*</answer>', model_output, re.DOTALL)
+    if answer_matches:
+        predicted_plan = answer_matches[-1].strip()
+        if predicted_plan:
+            # Compute correctness reward based on the plan from answer tag
+            correctness_reward = BlocksworldCorrectnessReward.__call__(predicted_plan, ground_truth) 
 
-        if correctness_reward == 2.0:
-            correctness_reward = 1.0
-        else:
-            correctness_reward = 0.0
+            if correctness_reward == 2.0:
+                actual_correctness_reward = 1.0
+            else:
+                actual_correctness_reward = 0.0
+    
+        # Compute state reward (even if format fails)
+        # intermediate_state_reward = intermediate_state_rewards(model_output)
+        # if len(intermediate_state_reward) > 0:
+            # state_reward = sum(intermediate_state_reward) / len(intermediate_state_reward)
 
-        
-    final_reward = format_reward + correctness_reward
+    final_reward = format_reward + state_reward + correctness_reward
 
-    return {"score": final_reward, "format_reward": format_reward, "correctness_reward": correctness_reward}
+    return {
+        "score": actual_correctness_reward, 
+        # "format_reward": format_reward, 
+        # "state_reward": state_reward, 
+        "correctness_reward": actual_correctness_reward
+    }

@@ -719,7 +719,7 @@ def compute_score(model_output: str, ground_truth):
         "correctness_reward": actual_correctness_reward
     }
 
-test_data = "/nas-ssd2/joykirat/code/state-representation/verl/scripts/data/blocksworld_state_inline/train.parquet"
+test_data = "scripts/data/blocksworld/train.parquet"
 
 test_data = pd.read_parquet(test_data)
 
@@ -729,7 +729,7 @@ for i in range(len(test_data)):
     ground_truths.append(test_data['reward_model'][i]['ground_truth'])
 
 
-predicted_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/o4-mini_responses_with_state_inline.json"
+predicted_path = "apiTest/o4-mini_responses_with_state_inline.json"
 # "/nas-ssd2/joykirat/code/state-representation/verl/scripts/train/checkpoints/blocksworld/state/qwen1_7b_blocksworld_with_state_v1/val_rollout/800.jsonl"
 
 def get_data(path):
@@ -764,7 +764,7 @@ def get_accuracy(predicted_data, ground_truths):
     return correct / total
 
 
-data_path = "/nas-ssd2/joykirat/code/state-representation/verl/apiTest/gpt-oss-120b_responses_basic_blocksworld_train.json"
+data_path = "apiTest/gpt-oss-120b_responses_basic_blocksworld_train.json"
 
 data = get_data(data_path)
 filtered_data = []
@@ -773,12 +773,14 @@ for i in range(len(data)):
     score = compute_score(data[i]['response'], ground_truths[i])
 
     if score['correctness_reward'] == 1.0:
+        data[i]['response'] = data[i]['response'].replace("<think>", "")
+        data[i]['response'] = data[i]['response'].replace("</think>", "")
         filtered_data.append(data[i])
 
 print(len(data))
 print(len(filtered_data))
 
-with open("/nas-ssd2/joykirat/code/state-representation/verl/apiTest/gpt-oss-120b_responses_basic_blocksworld_train_filtered.json", "w") as f:
+with open("apiTest/gpt-oss-120b_responses_basic_blocksworld_train_filtered.json", "w") as f:
     json.dump(filtered_data, f)
     
 
