@@ -42,6 +42,24 @@ def default_compute_score(
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
     
+    if data_source == "blocksworld-state-inline":
+        from . import blocksworldStateInline
+
+        res = blocksworldStateInline.compute_score(solution_str, ground_truth)
+    
+    elif data_source == "blocksworld-state-action":
+        from . import blocksworldStateAction
+
+        res = blocksworldStateAction.compute_score(solution_str, ground_truth)
+    elif data_source == "blocksworld":
+        from . import blocksworld
+
+        res = blocksworld.compute_score(solution_str, ground_truth)
+    
+    elif data_source == "blocksworld-state":
+        from . import blocksworldState
+
+        res = blocksworldState.compute_score(solution_str, ground_truth)
     if data_source == "openai/gsm8k":
         from . import gsm8k
 
